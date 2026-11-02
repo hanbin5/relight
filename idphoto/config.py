@@ -28,14 +28,21 @@ RATIO_GF_EPS = 1e-2
 DEFAULT_STRENGTH = 1.0  # s in [0, 1] blends the ratio toward 1
 
 # B.3 Single-frame matting and background replacement -----------------------------------
-CORNER_W, CORNER_H = 0.15, 0.22  # wall samples: upper corners, as fractions of the frame
-WALL_SIGMA_FLOOR = 0.012  # spread floor of the wall model (linear units)
-WALL_SIGMA_REL = 0.04  # ... and relative to the wall color
-SHADOW_SCALE = (0.35, 1.25)  # a pixel this much darker/brighter with wall chromaticity is wall
-COLOR_TAU = 4.0  # distance (in wall spreads) at which a pixel is clearly not wall
+BG_CLUSTERS, FG_CLUSTERS = 8, 5  # colors in the background and foreground models
+CLUSTER_SAMPLES = 2000  # pixels sampled per model each frame
+PLAIN_WALL_SHARE = 0.7  # rule 7 asks for a plain wall when less of the background is its main color
+CLUSTER_SPREAD_FLOOR = 0.03  # smallest cluster spread, in sqrt-linear color (sensor noise)
+BG_SHADOW_SCALE = (0.5, 1.25)  # a background color this much darker/brighter is still background
+FG_SHADE_SCALE = (0.6, 1.5)  # shading varies across the person too
+SCORE_TAU = 1.0  # spreads of distance difference per unit of log-odds
+OUTLIER_DISTANCE = 2.5  # distances beyond this many spreads count the same (color seen by neither model)
+PRIOR_CORE = 0.88  # prior probability of the person in the skull and the neck
+PRIOR_TORSO = 0.7  # ... and inside the shoulder line, where shoulder shapes vary more
 OPEN_RADIUS, CLOSE_RADIUS = 2, 5  # morphology at REF_WIDTH
-GF_RADIUS = 15  # guided filter for the hair edge (B.3: r = 15 px, eps = 1e-3)
-GF_EPS = 1e-3
+# Guided filter for the edge. B.3 starts at r = 15 px, eps = 1e-3 (luminance guide); with the
+# color guide, a 15-px window spread a gray halo along edges the mask placed a few px off.
+GF_RADIUS = 6
+GF_EPS = 2e-3
 SPILL_ALPHA_FLOOR = 0.1  # F = (I - (1 - a) mu_B) / max(a, 0.1)
 
 # B.4 Checker rules ----------------------------------------------------------------------

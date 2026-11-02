@@ -50,7 +50,7 @@ On macOS, the first start asks for camera access on behalf of the app you launch
 | sRGB → linear, luminance | A | [color.py](idphoto/color.py) | B.2 |
 | 478 face landmarks (the only pretrained part) | C | [landmarks.py](idphoto/landmarks.py) | A.3 |
 | Mesh normals, 9-term SH light fit, ratio relighting, 5-frame average | A | [relight.py](idphoto/relight.py), [mesh.py](idphoto/mesh.py) | B.2 |
-| Wall model, score, Otsu, opening/closing, guided filter, spill removal, compositing | B | [matting.py](idphoto/matting.py) | B.3 |
+| Background and person color models, score, Otsu, opening/closing, guided filter, spill removal, compositing | B | [matting.py](idphoto/matting.py) | B.3 |
 | Crown, pose, crop and scale, print sheet, 300 DPI files | C | [geometry.py](idphoto/geometry.py) | B.5 |
 | Seven checks with coaching messages, auto shutter | D | [checker.py](idphoto/checker.py) | B.4 |
 | Glue, settings, shutter render | all | [pipeline.py](idphoto/pipeline.py) | 2.2 |
@@ -80,18 +80,21 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/eval_synthetic.py` | Synthetic version of C.1: R_LR over a sweep of side lights, mask IoU against the true mask, staged faults and per-rule recall |
 | `uv run python tools/bench_fps.py` | Frames per second of the full live pipeline on this machine (target ≥ 10) |
 | `uv run python tools/process_image.py photo.jpg` | Runs the pipeline on still photos and saves the same files as the app |
+| `uv run python tools/capture_frames.py` | Saves webcam frames, their landmarks and each matting step to `out/debug/` (debugging, test sets). On macOS run it from a terminal that has camera access |
+| `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
 Tests: `uv run pytest` (53 tests, about 10 s).
 
-## Results so far (synthetic only)
+## Results so far
 
-Measured on an Apple M4 Pro with the synthetic sitter (`idphoto/synthetic.py`), which renders MediaPipe's canonical face with a chosen light, so each module can be checked against known truth. These are not the plan's results; those need real people (C.1).
+Measured on an Apple M4 Pro, mostly with the synthetic sitter (`idphoto/synthetic.py`), which renders MediaPipe's canonical face with a chosen light, so each module can be checked against known truth. These are not the plan's results; those need real people (C.1).
 
 - **Relighting:** a side window that leaves R_LR = 0.41 is relit to 0.94, and the shadowed share of the face drops from 15% to 0%. R_LR lands in 0.90–1.10 for side lights down to R_LR ≈ 0.4; harsher lights stop at about 0.84–0.89 because of the [0.5, 2] clip, and rule 1 then asks the user to turn toward the light, as C.4 plans.
-- **Matting:** IoU 1.000 against the true mask on four wall and top combinations. A top the color of the wall drops to 0.80, and rule 7 catches it (contrast 0.10 < 0.12).
+- **Matting:** IoU 1.000 against the true mask on four wall and top combinations. A top the color of the wall drops to 0.82, and rule 7 catches it (contrast below 0.12).
+- **A real, busy room** (clothes rack, white doors, ceiling light, black T-shirt; six webcam frames): hair, face and the black top are kept and the room is replaced. The edge on the clothes-rack side is not exact, and rule 7 asks for a plain wall there, since only 65% of that background is one color.
 - **Checker:** each staged fault (side shadow, glare, blur, tilt, turn, closed eyes, open mouth, top like the wall) fails its rule; the good frame passes all seven.
-- **Speed:** 20.8 fps for the whole live pipeline including MediaPipe (48 ms per frame from a 1280 × 720 camera frame).
+- **Speed:** 16.1 fps for the whole live pipeline including MediaPipe (62 ms per frame from a 1280 × 720 camera frame).
 - **Landmarks:** MediaPipe finds the synthetic face with a mean landmark error of 1.6% of the face width, which confirms that the renderer and the landmark numbering agree.
 
 ## Where the code goes beyond or departs from the plan
@@ -99,18 +102,20 @@ Measured on an Apple M4 Pro with the synthetic sitter (`idphoto/synthetic.py`), 
 These are choices made while implementing the drafts in Appendix B. Each is commented in the code.
 
 1. **Mesh normals** are stored on the 128 × 128 face crop the light is fitted on (`FrameContext.normals` plus `face_box`), not as a full (H, W, 3) array.
-2. **Guided filter guide (B.3 step 3):** the frame's color instead of its luminance (He et al.'s color-guide variant). With luminance alone, a lit neck and a wall of the same brightness could not be told apart and the soft band grew to about 14 px.
-3. **Wall model:** the spread σ_B is measured after scaling each corner sample to the mean brightness, and the distance allows the wall color to be 0.35–1.25 times as bright (a shadow on the wall keeps its chromaticity). Otherwise a wall lit unevenly from corner to corner inflated σ_B and hair was classified as wall.
-4. **Live speed:** in the live view, the score, Otsu, morphology and guided-filter coefficients run at half resolution and the coefficients are upsampled (fast guided filter). The saved photo uses the exact full-resolution filter.
-5. **Ratio outside the face** fades to the face mean weighted by brightness, so hair, neck and shoulders keep the exposure the face keeps.
-6. **Cheek polygons** sit below the lower orbital rim so glasses frames stay outside them.
-7. **Pitch ratio:** d(10, 1) / d(1, 152) is divided by its value on MediaPipe's canonical face (1.134), so 1.0 means a level head and the 0.85–1.15 band applies.
-8. **Sharpness (rule 3)** is measured on the camera's full-resolution frame, so the 256 × 256 face crop is not an upsampled copy of the 640-px live frame.
-9. **Rule 7:** the hair band is everything above the mouth within 1.1 face widths of the midline; contrast compares the top on both sides of the neck at the shoulder line with the wall color, in sRGB.
-10. **Crown:** the mask-top cue is used (averaged with the proportion rule) only when the two agree within 0.85–1.25 of the proportion's head length.
-11. **Exposure lock:** OpenCV's macOS backend has no exposure control, so the lock is reported as unavailable there and the light is averaged over 10 frames instead of 5 (the C.4 fallback). The same fallback applies when face brightness drifts more than 3% while the head holds still.
-12. **Rule 7 fallback (C.4):** if the cutout check fails when a photo is taken, the saved photo keeps the original wall and the result window says so.
-13. **Print sheets** are made for the résumé and ID formats; the profile photo is for screens.
+2. **Guided filter (B.3 step 3):** the guide is the frame's color instead of its luminance (He et al.'s color-guide variant), since a lit neck and a wall of the same brightness differ only in color. The radius is 6 px at 640 px wide instead of the starting 15 px: in a real room, a 15-px window spread a gray halo wherever the mask edge was a few pixels off.
+3. **Background and person color models (B.3 step 1):** the single wall color from the upper corners failed in a real room (corners holding a window, a patterned ceiling and a door frame), and dark hair was classified as a shadowed wall. The background is now k-means clusters (8) of the pixels the landmarks place well outside the person, and the person gets clusters (5) of the face, the head under the crown and a column straight below the chin. Each pixel weighs its distance to the nearest background color (allowing it 0.5–1.25 times as bright, so a wall shadow stays background) against its distance to the nearest person color; distances past 2.5 spreads count the same. In front of a plain wall this reduces to the plan's wall model.
+4. **Head-and-shoulders prior:** besides the region where the person can be, a prior probability that is high in the skull and neck (0.88) and inside the shoulder line (0.7), so a black top in front of dark clutter is kept; after Otsu and morphology, only the region connected to the face is kept and holes are filled.
+5. **Live speed:** in the live view, steps 1–3 and the guided-filter coefficients run at half resolution and the coefficients are upsampled (fast guided filter); connectivity runs on a grid 4 times coarser. The saved photo uses the exact full-resolution filter.
+6. **Spill removal:** μ_B in F = (I − (1 − α) μ_B) / max(α, 0.1) is the background color around each edge pixel (the mean of nearby background pixels), not one wall color.
+7. **Ratio outside the face** fades to the face mean weighted by brightness, so hair, neck and shoulders keep the exposure the face keeps.
+8. **Cheek polygons** sit below the lower orbital rim so glasses frames stay outside them.
+9. **Pitch ratio:** d(10, 1) / d(1, 152) is divided by its value on MediaPipe's canonical face (1.134), so 1.0 means a level head and the 0.85–1.15 band applies.
+10. **Sharpness (rule 3)** is measured on the camera's full-resolution frame, so the 256 × 256 face crop is not an upsampled copy of the 640-px live frame.
+11. **Rule 7:** the hair band is everything above the mouth within 1.1 face widths of the midline. Contrast compares the top with the background in the same rows, on each side of the neck, and the weaker side counts. When the cutout fails, the message asks for a top unlike the wall (low contrast), for a plain wall (less than 70% of the background is one color), or to move away from the wall.
+12. **Crown:** the mask-top cue is used (averaged with the proportion rule) only when the two agree within 0.85–1.25 of the proportion's head length.
+13. **Exposure lock:** OpenCV's macOS backend has no exposure control, so the lock is reported as unavailable there and the light is averaged over 10 frames instead of 5 (the C.4 fallback). The same fallback applies when face brightness drifts more than 3% while the head holds still.
+14. **Rule 7 fallback (C.4):** if the cutout check fails when a photo is taken, the saved photo keeps the original wall and the result window says so.
+15. **Print sheets** are made for the résumé and ID formats; the profile photo is for screens.
 
 ## Not done yet
 

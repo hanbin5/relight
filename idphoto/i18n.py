@@ -43,6 +43,8 @@ STRINGS = {
     "msg_close_mouth": {"en": "close your mouth", "ko": "입을 다물어 주세요"},
     "msg_move_from_wall": {"en": "move about 1 m from the wall", "ko": "벽에서 1m 정도 떨어져 앉으세요"},
     "msg_top_vs_wall": {"en": "wear a top that differs from the wall", "ko": "벽과 다른 색의 상의를 입어 주세요"},
+    "msg_plain_wall": {"en": "sit in front of a plain wall: the room behind you is too busy to cut out cleanly",
+                       "ko": "단색 벽 앞에 앉아 주세요: 뒤 배경이 복잡해 깔끔하게 분리되지 않습니다"},
     "msg_no_face": {"en": "look at the camera", "ko": "카메라를 바라봐 주세요"},
     "msg_move_back": {"en": "move back a little so the whole photo fits",
                       "ko": "사진이 다 들어오도록 조금 뒤로 물러나세요"},

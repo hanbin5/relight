@@ -179,22 +179,34 @@ class Checker:
         uncertain = (a > 0.1) & (a < 0.9) & ~hair_band
         share = float(uncertain.mean()) if a.size else 0.0
 
-        # Person-wall contrast at the shoulder line, on both sides of the neck.
+        # Person-wall contrast at the shoulder line, on each side of the neck: the top against
+        # the background in the same rows on that side (or the background's mean color if
+        # none shows there). The weaker side counts: that is where the cutout fails.
         y_s = f["chin"][1] + 0.9 * f["ec"]
         rows = slice(int(np.clip(y_s - 0.08 * f["ec"], 0, h - 1)), int(np.clip(y_s + 0.08 * f["ec"], 1, h)))
-        cols = (np.arange(w) + 0.5)
-        side = (np.abs(cols - f["cx"]) > 0.45 * f["fw"]) & (np.abs(cols - f["cx"]) < 1.0 * f["fw"])
+        offset = np.arange(w) + 0.5 - f["cx"]
         contrast = None
-        if rows.stop > rows.start and side.any():
-            person = ctx.linear_rgb[rows][:, side].reshape(-1, 3).mean(axis=0)
-            wall = ctx.wall_color
-            diff = color.linear_to_srgb(person) - color.linear_to_srgb(wall)
-            contrast = float(np.linalg.norm(diff) / np.sqrt(3))
+        if rows.stop > rows.start:
+            band, behind = ctx.linear_rgb[rows], alpha[rows] < 0.1
+            for sign in (-1, 1):
+                d = sign * offset
+                top = (d > 0.45 * f["fw"]) & (d < 1.0 * f["fw"])
+                wall_side = behind & (d > 0)[None, :]
+                if not top.any():
+                    continue
+                person = band[:, top].reshape(-1, 3).mean(axis=0)
+                wall = band[wall_side].mean(axis=0) if wall_side.sum() >= 20 else ctx.wall_color
+                c = float(np.linalg.norm(color.linear_to_srgb(person) - color.linear_to_srgb(wall)) / np.sqrt(3))
+                contrast = c if contrast is None else min(contrast, c)
         contrast_ok = contrast is None or contrast >= config.CONTRAST_MIN
         ok = bool(share < config.UNCERTAIN_MAX and contrast_ok)
-        message = None if ok else ("top_vs_wall" if not contrast_ok else "move_from_wall")
+        plain = ctx.stats.get("matting", {}).get("plain_share", 1.0)
+        message = None
+        if not ok:  # what to change: the top, the background, or the distance to the wall
+            message = ("top_vs_wall" if not contrast_ok
+                       else "plain_wall" if plain < config.PLAIN_WALL_SHARE else "move_from_wall")
         return Verdict(7, RULES[7], ok, share, f"< {config.UNCERTAIN_MAX:.0%}; contrast ≥ {config.CONTRAST_MIN}",
-                       message, {"uncertain_share": share, "contrast": contrast})
+                       message, {"uncertain_share": share, "contrast": contrast, "plain_background": plain})
 
 
 class AutoShutter:
