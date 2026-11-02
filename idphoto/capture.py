@@ -24,16 +24,43 @@ from . import config, synthetic
 _EXPOSURE_FLAGS = {"V4L2": (1, 3), "DSHOW": (0.25, 0.75), "MSMF": (0.25, 0.75)}
 
 
+def camera_permission() -> str:
+    """This process's macOS camera authorization: authorized, not_determined, denied,
+    restricted, or unknown (other systems, or the check failed). Reading it shows no prompt."""
+    if platform.system() != "Darwin":
+        return "unknown"
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        av = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/AVFoundation.framework/AVFoundation")
+        objc.objc_getClass.restype = objc.sel_registerName.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        send = ctypes.CFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(("objc_msgSend", objc))
+        status = send(objc.objc_getClass(b"AVCaptureDevice"),
+                      objc.sel_registerName(b"authorizationStatusForMediaType:"),
+                      ctypes.c_void_p.in_dll(av, "AVMediaTypeVideo").value)
+    except Exception:
+        return "unknown"
+    return {0: "not_determined", 1: "restricted", 2: "denied", 3: "authorized"}.get(status, "unknown")
+
+
 class Camera:
+    """A webcam. On macOS, create it on the main thread: only there can OpenCV ask the
+    user for camera access (the first attempt shows the request and fails; retry after it)."""
+
     def __init__(self, index: int = 0, size=config.CAMERA_SIZE):
         import cv2
 
         self._cv2 = cv2
-        api = {"Darwin": cv2.CAP_AVFOUNDATION, "Windows": cv2.CAP_DSHOW, "Linux": cv2.CAP_V4L2}.get(
-            platform.system(), cv2.CAP_ANY)
-        cap = cv2.VideoCapture(index, api)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(index)
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+        apis = {"Darwin": [cv2.CAP_AVFOUNDATION], "Windows": [cv2.CAP_DSHOW, cv2.CAP_MSMF],
+                "Linux": [cv2.CAP_V4L2, cv2.CAP_ANY]}.get(platform.system(), [cv2.CAP_ANY])
+        for api in apis:
+            cap = cv2.VideoCapture(index, api)
+            if cap.isOpened():
+                break
         if not cap.isOpened():
             raise RuntimeError(f"Camera {index} is not available (check the camera permission).")
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
@@ -159,6 +186,10 @@ class DemoSource:
 
     def release(self):
         pass
+
+
+def is_camera(spec: str | None) -> bool:
+    return spec is None or str(spec).isdigit()
 
 
 def open_source(spec: str | None, camera_size=config.CAMERA_SIZE):

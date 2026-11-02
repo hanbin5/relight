@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from . import color, config, geometry
-from .capture import DemoSource, FrameGrabber, LockMonitor, open_source
+from .capture import DemoSource, FrameGrabber, LockMonitor, camera_permission, is_camera, open_source
 from .i18n import t
 from .pipeline import BACKGROUNDS, Pipeline, Settings, to_live
 
@@ -55,11 +55,10 @@ class Worker(QThread):
     captured = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, source_spec, settings: Settings, camera_size):
+    def __init__(self, source, settings: Settings):
         super().__init__()
-        self.source_spec = source_spec
+        self.source = source  # opened on the main thread (see MainWindow.open_source)
         self.settings = settings
-        self.camera_size = camera_size
         self.running = True
         self.view_before = False
         self.mirror = True
@@ -67,14 +66,15 @@ class Worker(QThread):
         self.rearm_request = False
 
     def run(self):
+        source = self.source
         try:
-            source = open_source(self.source_spec, self.camera_size)
             detector = None
             if not isinstance(source, DemoSource):
                 from .landmarks import FaceLandmarkDetector
 
                 detector = FaceLandmarkDetector()
         except Exception as exc:
+            source.release()
             self.failed.emit(str(exc))
             return
         grabber = FrameGrabber(source)
@@ -166,7 +166,8 @@ class LiveView(QWidget):
         p.fillRect(self.rect(), QColor("#ecebe8"))
         if self.image is None:
             p.setPen(QColor("#555"))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message or t("lock_warming", self.lang))
+            flags = Qt.AlignmentFlag.AlignCenter.value | Qt.TextFlag.TextWordWrap.value
+            p.drawText(QRectF(self.rect()).adjusted(60, 0, -60, 0), flags, self.message or t("lock_warming", self.lang))
             return
         iw, ih = self.image.width(), self.image.height()
         s = min(self.width() / iw, self.height() / ih)
@@ -348,14 +349,54 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.resize(1280, 800)
 
-        self.worker = Worker(source, self.settings, camera_size)
+        self.source_spec, self.camera_size = source, camera_size
+        self.worker = None
+        self.open_attempts = 0
+        self.open_timer = QTimer(self)
+        self.open_timer.setSingleShot(True)
+        self.open_timer.timeout.connect(self.open_source)
+        self.open_timer.start(0)  # once the event loop runs
+        self.flash_timer = QTimer(self)
+        self.flash_timer.timeout.connect(self._fade_flash)
+        self.retranslate()
+
+    # -- source --------------------------------------------------------------------------
+    def open_source(self):
+        """Open the frame source on the main thread, then start processing.
+
+        macOS asks for camera access only from the main thread. The first attempt shows the
+        request and fails, so we poll the permission until the user answers it.
+        """
+        self.open_attempts += 1
+        camera = is_camera(self.source_spec)
+        permission = camera_permission() if camera else "unknown"
+        if permission in ("denied", "restricted"):
+            return self._show_message(t("camera_denied", self.lang))
+        if permission == "not_determined" and self.open_attempts > 1:
+            return self._wait_for_camera()  # the request is on screen; don't ask again
+        try:
+            source = open_source(self.source_spec, self.camera_size)
+        except Exception as exc:
+            if camera and camera_permission() == "not_determined":
+                return self._wait_for_camera()
+            if camera and permission == "unknown" and self.open_attempts < 10:
+                return self._wait_for_camera()  # permission state unreadable: retry a few times
+            return self.on_failed(str(exc))
+        self.view.message = None
+        self.worker = Worker(source, self.settings)
+        self.worker.mirror = self.view.mirror
         self.worker.frame_ready.connect(self.on_frame)
         self.worker.captured.connect(self.on_captured)
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
-        self.flash_timer = QTimer(self)
-        self.flash_timer.timeout.connect(self._fade_flash)
-        self.retranslate()
+
+    def _wait_for_camera(self):
+        self._show_message(t("camera_allow", self.lang))
+        self.open_timer.start(1000)
+
+    def _show_message(self, text: str):
+        self.view.message = text
+        self.view.update()
 
     # -- panel ---------------------------------------------------------------------------
     def _section(self, layout):
@@ -527,20 +568,22 @@ class MainWindow(QMainWindow):
 
     def set_auto(self, on: bool):
         self.settings.auto_shutter = on
-        if on:
+        if on and self.worker:
             self.worker.rearm_request = True
 
     def set_mirror(self, on: bool):
-        self.worker.mirror = on
+        if self.worker:
+            self.worker.mirror = on
         self.view.mirror = on
 
     def set_before(self, on: bool):
-        self.worker.view_before = on
+        if self.worker:
+            self.worker.view_before = on
         self.view.before = on
         self.view.update()
 
     def take_photo(self):
-        if self.dialog is None:
+        if self.dialog is None and self.worker:
             self.worker.shutter_request = True
 
     def toggle_language(self):
@@ -638,8 +681,10 @@ class MainWindow(QMainWindow):
         self.view.update()
 
     def closeEvent(self, event):
-        self.worker.running = False
-        self.worker.wait(3000)
+        self.open_timer.stop()
+        if self.worker:
+            self.worker.running = False
+            self.worker.wait(3000)
         super().closeEvent(event)
 
 

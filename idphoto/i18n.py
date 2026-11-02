@@ -77,6 +77,14 @@ STRINGS = {
     "kept_wall": {"en": "The cutout was not clean (check 7), so the original wall was kept.",
                   "ko": "배경 분리가 깔끔하지 않아(점검 7) 원래 벽을 그대로 두었습니다."},
     "camera_error": {"en": "Could not start the camera: {err}", "ko": "카메라를 시작할 수 없습니다: {err}"},
+    "camera_allow": {"en": "Allow camera access in the macOS dialog. No dialog? Run the app from Terminal, "
+                           "or turn on the app you started it from in System Settings → Privacy & Security → Camera.",
+                     "ko": "macOS 창에서 카메라 접근을 허용해 주세요. 창이 안 뜨면 터미널 앱에서 실행하거나, "
+                           "시스템 설정 → 개인정보 보호 및 보안 → 카메라에서 이 앱을 실행한 프로그램을 켜 주세요."},
+    "camera_denied": {"en": "Camera access is off for the app you started this from. Turn it on in System Settings → "
+                            "Privacy & Security → Camera, then quit that app and start again.",
+                      "ko": "이 앱을 실행한 프로그램의 카메라 접근이 꺼져 있습니다. 시스템 설정 → 개인정보 보호 및 보안 → "
+                            "카메라에서 켠 뒤, 그 프로그램을 종료하고 다시 실행해 주세요."},
 }
 
 

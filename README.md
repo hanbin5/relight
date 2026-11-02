@@ -36,7 +36,9 @@ uv run idphoto --source photo.jpg --lang en
 - `--lang ko|en`: interface language (default: the system language). The panel's language button switches it live.
 - `--camera-size 1920x1080`: request a larger camera frame for sharper saved photos.
 
-In the app, hold **B** to see the frame before processing, and press **Space** to take a photo without waiting for the auto shutter. On macOS, the first run asks for camera access for your terminal app; if the camera stays blank after you allow it, start the app again.
+In the app, hold **B** to see the frame before processing, and press **Space** to take a photo without waiting for the auto shutter.
+
+On macOS, the first start asks for camera access on behalf of the app you launched it from (Terminal, iTerm and so on): click Allow and the live view starts. If no dialog appears, which can happen in an editor's built-in terminal, run it from Terminal, or turn that app on in System Settings → Privacy & Security → Camera and restart it.
 
 ## What happens to each frame
 
