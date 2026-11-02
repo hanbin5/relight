@@ -1,0 +1,31 @@
+[project]
+name = "idphoto"
+version = "0.1.0"
+description = "Webcam ID photo app: real-time relighting, background replacement and a capture-time checker"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "mediapipe>=1.2.0",
+    "numpy>=2.2.6",
+    "opencv-contrib-python>=5.0.0.93",
+    "pyside6-essentials>=6.12.0",
+]
+
+[project.scripts]
+idphoto = "idphoto.gui:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["idphoto"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.9",
+    "pytest>=9.2.0",
+]
