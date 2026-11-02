@@ -57,6 +57,20 @@ def test_good_frame_passes_every_rule_and_fires_the_shutter():
     assert fired and not pipeline.shutter.armed
 
 
+def test_sharpness_bound_is_calibrated_per_camera():
+    from idphoto import config
+    from idphoto.checker import Checker
+
+    c = Checker()
+    assert c.sharpness_bound() == config.SHARPNESS_MIN  # until the camera has been seen
+    c.sharpness_seen.extend([50.0] * 40)  # a soft webcam
+    assert c.sharpness_bound() == pytest.approx(0.7 * 50.0)
+    c.sharpness_seen.extend([400.0] * 90)  # a sharp camera is never held above B.4's 120
+    assert c.sharpness_bound() == config.SHARPNESS_MIN
+    c.sharpness_seen.extend([5.0] * 90)  # nor a hopeless one below the floor
+    assert c.sharpness_bound() == config.SHARPNESS_FLOOR
+
+
 def test_auto_shutter_needs_five_passing_frames_in_a_row():
     s = AutoShutter(frames=5)
     assert not any(s.update(ok) for ok in [True, True, True, True, False, True, True, True, True])

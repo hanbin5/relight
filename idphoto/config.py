@@ -54,6 +54,10 @@ GLARE_FACE_MAX = 0.01  # rule 2: < 1% of the face
 GLARE_LENS_MAX = 0.005  # rule 2: "no glare on lenses", with a tiny tolerance for noise
 SHARPNESS_MIN = 120.0  # rule 3: variance of the Laplacian on a 256 x 256 face crop
 SHARPNESS_CROP = 256
+SHARPNESS_WINDOW = 90  # recent frames that calibrate the camera (about 5 s)
+SHARPNESS_WARMUP = 15  # frames before the calibration applies
+SHARPNESS_REL = 0.7  # a frame must reach 70% of the camera's sharp frames ...
+SHARPNESS_FLOOR = 15.0  # ... and never less than this
 ROLL_MAX_DEG = 2.5  # rule 4
 YAW_RATIO_MAX = 0.06  # rule 4
 PITCH_RATIO_RANGE = (0.85, 1.15)  # rule 4, relative to the canonical face (1.0 = level)

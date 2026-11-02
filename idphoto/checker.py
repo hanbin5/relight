@@ -5,6 +5,7 @@ against its bound and, when it fails, the key of a coaching message (see i18n.py
 shutter fires once all seven rules pass for 5 frames in a row.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -48,6 +49,18 @@ def _box_slices(box, size):
 
 
 class Checker:
+    def __init__(self):
+        self.sharpness_seen: deque = deque(maxlen=config.SHARPNESS_WINDOW)
+
+    def sharpness_bound(self) -> float:
+        """Rule 3's bound, calibrated per camera (B.4). A camera whose sharp frames stay below
+        120 is held to 70% of them (the 80th percentile of recent frames), so motion blur still
+        fails; never below SHARPNESS_FLOOR."""
+        if len(self.sharpness_seen) < config.SHARPNESS_WARMUP:
+            return config.SHARPNESS_MIN
+        best = float(np.percentile(self.sharpness_seen, 80))
+        return min(config.SHARPNESS_MIN, max(config.SHARPNESS_FLOOR, config.SHARPNESS_REL * best))
+
     def evaluate(self, ctx: FrameContext) -> dict:
         lm = ctx.landmarks
         if lm is None:
@@ -132,8 +145,10 @@ class Checker:
         else:
             gray = color.gray_u8(color.encode_u8(npimg.resize(ctx.output_frame, n, n, "linear", box=box)))
         score = float(npimg.laplacian3(gray).var())
-        ok = score >= config.SHARPNESS_MIN
-        return Verdict(3, RULES[3], ok, score, f"≥ {config.SHARPNESS_MIN:.0f}", None if ok else "hold_still")
+        self.sharpness_seen.append(score)
+        bound = self.sharpness_bound()
+        ok = score >= bound
+        return Verdict(3, RULES[3], ok, score, f"≥ {bound:.0f}", None if ok else "hold_still", {"bound": bound})
 
     # Rule 4 -------------------------------------------------------------------------
     def head_pose(self, ctx: FrameContext) -> Verdict:

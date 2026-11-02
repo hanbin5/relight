@@ -103,7 +103,8 @@ class Pipeline:
         ctx.linear_rgb = color.decode_u8(raw_full)
         ctx.Y = color.luminance(ctx.linear_rgb)
         ctx.landmarks = live.landmarks * np.float32(scale)
-        Relighter().process(ctx, settings.strength, light=live.light_coeffs, update=False)
+        Relighter().process(ctx, settings.strength, light=live.light_coeffs, update=False,
+                            target_yaw=live.stats.get("target_yaw"))
         background = settings.background_linear()
         # C.4 fallback: when the cutout was not clean (rule 7), keep the original wall.
         cutout = (live.rule_verdicts or {}).get(7)

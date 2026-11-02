@@ -46,6 +46,19 @@ def test_relighting_evens_a_side_light(side_lit):
     assert ctx.relit_frame.shape == rgb.shape and ctx.light_coeffs.shape == (9,)
 
 
+def test_target_follows_a_turned_head():
+    """A camera-fixed frontal light makes the cheek facing the camera brighter; the target
+    turns with the head, so the relit cheeks match."""
+    rgb, lm, _ = synthetic.render(synthetic.Scene(yaw=12.0, **FRONT))
+    ctx = make_ctx(rgb, lm)
+    relighter = Relighter()
+    for _ in range(5):
+        relighter.process(ctx)
+    assert abs(ctx.stats["target_yaw"] - 12.0) < 1.0
+    assert ctx.stats["r_lr_before"] < 0.85
+    assert 0.95 <= ctx.stats["r_lr_after"] <= 1.05
+
+
 def test_relighting_barely_changes_an_even_light(front_lit):
     rgb, lm, _ = front_lit
     ctx = make_ctx(rgb, lm)

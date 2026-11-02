@@ -38,23 +38,45 @@ def sh_basis(n: np.ndarray) -> np.ndarray:
     )
 
 
-def target_light(elevation_deg: float = config.TARGET_ELEVATION_DEG,
-                 ambient: float = config.TARGET_AMBIENT) -> np.ndarray:
-    """SH coefficients of the target: a frontal key light raised by elevation_deg plus a soft fill.
+_HEMISPHERE = None
 
-    The shading ambient + max(0, n . d) is projected on the nine terms over the visible
-    hemisphere; the left-right terms are set to exactly zero.
+
+def _hemisphere():
+    """Normals spread evenly over the visible hemisphere, and the pseudo-inverse of their basis."""
+    global _HEMISPHERE
+    if _HEMISPHERE is None:
+        k = np.arange(4000) + 0.5
+        z = k / 4000.0  # uniform area on the hemisphere z >= 0
+        phi = np.pi * (1.0 + 5.0**0.5) * k
+        rho = np.sqrt(1.0 - z * z)
+        n = np.stack([rho * np.cos(phi), rho * np.sin(phi), z], axis=-1)
+        _HEMISPHERE = (n, np.linalg.pinv(sh_basis(n)))
+    return _HEMISPHERE
+
+
+def target_light(elevation_deg: float = config.TARGET_ELEVATION_DEG,
+                 ambient: float = config.TARGET_AMBIENT, yaw_deg: float = 0.0) -> np.ndarray:
+    """SH coefficients of the target: a key light in front of the face, raised by
+    elevation_deg, plus a soft fill.
+
+    The key light turns with the head's yaw, so both cheeks get the same light even when the
+    head is not square to the camera (with a camera-fixed light, the cheek facing the camera
+    gets more and R_LR drifts with the head). The shading ambient + max(0, n . d) is projected
+    on the nine terms over the visible hemisphere; at yaw 0 the left-right terms are exactly zero.
     """
-    k = np.arange(4000) + 0.5
-    z = k / 4000.0  # uniform area on the hemisphere z >= 0
-    phi = np.pi * (1.0 + 5.0**0.5) * k
-    rho = np.sqrt(1.0 - z * z)
-    n = np.stack([rho * np.cos(phi), rho * np.sin(phi), z], axis=-1)
-    e = np.radians(elevation_deg)
-    shade = ambient + np.maximum(n @ np.array([0.0, np.sin(e), np.cos(e)]), 0.0)
-    coef = np.linalg.lstsq(sh_basis(n), shade, rcond=None)[0]
-    coef[list(LEFT_RIGHT_TERMS)] = 0.0
+    n, pinv = _hemisphere()
+    e, y = np.radians(elevation_deg), np.radians(yaw_deg)
+    d = np.array([np.sin(y) * np.cos(e), np.sin(e), np.cos(y) * np.cos(e)])
+    coef = pinv @ (ambient + np.maximum(n @ d, 0.0))
+    if yaw_deg == 0.0:
+        coef[list(LEFT_RIGHT_TERMS)] = 0.0
     return coef.astype(np.float32)
+
+
+def face_yaw(vertex_normals: np.ndarray) -> float:
+    """Yaw of the face in degrees (+ turned toward the image right), from its mean normal."""
+    m = vertex_normals.mean(axis=0)
+    return float(np.degrees(np.arctan2(m[0], m[2])))
 
 
 def fit_light(Y: np.ndarray, normals: np.ndarray, skin: np.ndarray, iterations: int = 2) -> np.ndarray:
@@ -81,25 +103,28 @@ class Relighter:
     def __init__(self, fit_size: int = config.FIT_SIZE, smooth_frames: int = config.SMOOTH_FRAMES):
         self.fit_size = fit_size
         self.history: deque = deque(maxlen=smooth_frames)
-        self.target0 = target_light()
+        self.yaws: deque = deque(maxlen=smooth_frames)  # the target follows the averaged yaw
         self.frames_lost = 0
 
     def set_smoothing(self, frames: int):
         self.history = deque(self.history, maxlen=frames)
+        self.yaws = deque(self.yaws, maxlen=frames)
 
     def reset(self):
         self.history.clear()
+        self.yaws.clear()
 
     @property
     def light(self):
         return np.mean(self.history, axis=0).astype(np.float32) if self.history else None
 
     def process(self, ctx: FrameContext, strength: float = config.DEFAULT_STRENGTH,
-                light: np.ndarray | None = None, update: bool = True) -> FrameContext:
+                light: np.ndarray | None = None, update: bool = True,
+                target_yaw: float | None = None) -> FrameContext:
         """Fill normals, face_mask, light_coeffs, relit_frame and ratio_map of ctx.
 
-        light: use these coefficients instead of fitting (the shutter frame reuses the live
-        average); update=False leaves the running average untouched.
+        light and target_yaw: use these instead of fitting and measuring (the shutter frame
+        reuses the live averages); update=False leaves the running averages untouched.
         """
         h, w = ctx.Y.shape
         ctx.face_mask = np.zeros((h, w), bool)
@@ -111,7 +136,8 @@ class Relighter:
         S = self.fit_size
         lm = ctx.landmarks
         box = mesh.face_box(lm)
-        normals, cov = mesh.mesh_normals(lm, box, S)
+        vertex_normals = mesh.vertex_normals(lm)
+        normals, cov = mesh.mesh_normals(lm, box, S, vertex_normals)
         regions = mesh.region_masks(mesh.to_grid(lm, box, S), (S, S))
         Yc = npimg.resize(ctx.Y, S, S, kernel="linear", box=box)
         core = npimg.erode(cov, 1)
@@ -129,11 +155,16 @@ class Relighter:
                 self.frames_lost = 0
             light = self.light if update else coef
         light = np.asarray(light, np.float32)
+        if target_yaw is None:
+            yaw = face_yaw(vertex_normals)
+            if update:
+                self.yaws.append(yaw)
+            target_yaw = float(np.mean(self.yaws)) if update else yaw
 
         # Shading ratio on the face grid.
         Hn = sh_basis(normals[cov])
         fitted = Hn @ light
-        target = Hn @ self.target0
+        target = Hn @ target_light(yaw_deg=target_yaw)
         on_skin = skin[cov]
         mean_fit = max(float(fitted[on_skin].mean()), 1e-4)
         target *= mean_fit / max(float(target[on_skin].mean()), 1e-6)  # keep mean brightness
@@ -177,6 +208,7 @@ class Relighter:
             r_lr_after=mesh.cheek_balance(relit_grid, regions, skin),
             shadow_before=mesh.shadow_share(Yc, skin, config.SHADOW_FACTOR),
             shadow_after=mesh.shadow_share(relit_grid, skin, config.SHADOW_FACTOR),
+            target_yaw=target_yaw,
             fit_grid=dict(Y=Yc, skin=skin, coverage=cov, fitted=fitted_grid, target=target_grid, ratio=grid),
         )
         return ctx
