@@ -5,3 +5,5 @@ __pycache__/
 out/
 # downloaded by tools/fetch_model.py
 models/
+# PyCharm project settings (per user)
+.idea/
