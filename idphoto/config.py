@@ -70,5 +70,13 @@ SHUTTER_FRAMES = 5  # auto shutter: all rules pass for 5 frames in a row
 # B.5 Crop geometry -----------------------------------------------------------------------
 CROWN_K = 2.0  # crown ~ chin - k (chin - eye line)
 CROWN_MASK_AGREE = (0.85, 1.25)  # mask-top cue is used only if it agrees with the proportion
+CROWN_MASK_WEIGHT = 0.5  # share of the mask-top cue when it is used (0 = proportion only, 1 = mask only)
+# Crop mode. "head": the head with its hair fills head_share of the photo (plan B.5).
+# "face": chin to skull top (the proportion rule, hair left out) fills face_share, so faces come
+# out the same size whatever the hairstyle; the hair top (the crown above) only moves the crop up
+# or zooms out so the hair is not cut. Per-format shares are in geometry.FORMATS.
+CROP_MODE = "head"
+HAIR_MARGIN_MIN = 0.04  # face mode: least room above the hair, as a share of the photo height
+CHIN_MAX = 0.92  # face mode: lowest the chin may sit, as a share of the photo height
 PRINT_DPI = 300
 SHEET_PX = (1800, 1200)  # 6 x 4 in landscape at 300 DPI (w, h)

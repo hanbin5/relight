@@ -30,6 +30,48 @@ def test_crown_follows_the_proportion_rule():
     assert source == "proportion"
 
 
+
+def test_mask_weight_moves_the_crown_between_the_two_cues(monkeypatch):
+    rgb, lm, person = synthetic.render(synthetic.Scene(**SIDE))
+    alpha = person.astype(np.float32)
+    cues = geometry.crown_cues(lm, alpha)
+    assert cues["mask"] is not None
+    monkeypatch.setattr(config, "CROWN_MASK_AGREE", (0.0, 10.0))
+    for w, expected in ((0.0, cues["proportion"]), (1.0, cues["mask"]),
+                        (0.25, 0.75 * cues["proportion"] + 0.25 * cues["mask"])):
+        monkeypatch.setattr(config, "CROWN_MASK_WEIGHT", w)
+        crown, source = geometry.estimate_crown(lm, alpha)
+        assert source == "mask+proportion"
+        np.testing.assert_allclose(crown, expected, atol=1e-4)
+
+
+
+@pytest.mark.parametrize("key", list(geometry.FORMATS))
+def test_face_mode_sizes_the_face_from_the_skull(key):
+    fmt = geometry.FORMATS[key]
+    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))  # no mask: crown = skull
+    crop = geometry.face_crop(geo, fmt)
+    x0, y0, x1, y1 = crop["box"]
+    assert crop["action"] == "fits"
+    assert (x1 - x0) / (y1 - y0) == pytest.approx(fmt.size_px[0] / fmt.size_px[1])
+    assert crop["face_share"] == pytest.approx(fmt.face_share)
+    assert (geo["skull"][1] - y0) / (y1 - y0) == pytest.approx(fmt.skull_top)
+    assert geometry.crop_box(geo, fmt, mode="face") == crop["box"]
+
+
+def test_face_mode_keeps_big_hair_inside_the_photo():
+    fmt = geometry.FORMATS["resume"]
+    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
+    face = float(np.linalg.norm(geo["chin"] - geo["skull"]))
+    for extra, action in ((0.18, "moved"), (0.40, "zoomed")):
+        big = {**geo, "crown": geo["skull"] - np.float32([0, extra * face])}
+        crop = geometry.face_crop(big, fmt)
+        x0, y0, x1, y1 = crop["box"]
+        assert crop["action"] == action
+        assert crop["hair_top"] == pytest.approx(config.HAIR_MARGIN_MIN)
+        assert crop["chin"] <= config.CHIN_MAX + 1e-6
+
+
 def test_print_sheets_fit_ten_and_eight_photos():
     for key, count in (("resume", 10), ("id", 8)):
         fmt = geometry.FORMATS[key]
