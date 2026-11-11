@@ -80,6 +80,7 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/eval_synthetic.py` | Synthetic version of C.1: R_LR over a sweep of side lights, mask IoU against the true mask, staged faults and per-rule recall |
 | `uv run python tools/bench_fps.py` | Frames per second of the full live pipeline on this machine (target ≥ 10) |
 | `uv run python tools/process_image.py photo.jpg` | Runs the pipeline on still photos and saves the same files as the app |
+| `uv run python tools/crown_inspector.py photo.jpg` | Crown and crop tuning window: both crown cues, the crop box and the saved photo, with sliders for k, the mask band and the head share. Click the top of the head to mark the true crown; it shows the head-length error in mm and the best-fit k. `--demo` uses synthetic faces |
 | `uv run python tools/capture_frames.py` | Saves webcam frames, their landmarks and each matting step to `out/debug/` (debugging, test sets). On macOS run it from a terminal that has camera access |
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |

@@ -62,16 +62,22 @@ def head_pose(lm: np.ndarray) -> dict:
     return {"roll_deg": roll, "yaw_ratio": yaw_ratio, "pitch_ratio": pitch_ratio}
 
 
-def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
-    """Crown point (x, y) and which cues were used."""
+def crown_cues(lm: np.ndarray, alpha: np.ndarray | None = None) -> dict:
+    """Both crown cues before they are combined.
+
+    proportion: chin + k (eye line - chin). mask: where the foreground mask ends on the
+    midline above the forehead mark, or None if it never ends inside the frame. agree:
+    the mask cue's distance from the chin over the proportion cue's (1.0 = same point).
+    up and ec are the unit chin-to-eye direction and the chin-to-eye distance.
+    """
     eye = 0.5 * (lm[mesh.IRIS_R, :2] + lm[mesh.IRIS_L, :2])
     chin = lm[mesh.CHIN, :2]
     up = eye - chin
     ec = float(np.linalg.norm(up))
     up = up / max(ec, 1e-6)
-    crown_prop = chin + config.CROWN_K * ec * up
+    cues = {"proportion": chin + config.CROWN_K * ec * up, "mask": None, "agree": None, "up": up, "ec": ec}
     if alpha is None:
-        return crown_prop, "proportion"
+        return cues
     # Scan up the midline from the forehead mark until the mask ends.
     start = lm[mesh.FOREHEAD, :2]
     steps = np.arange(0.0, 1.2 * ec, 0.5)
@@ -81,13 +87,19 @@ def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
     below = a < 0.5
     run = np.convolve(below.astype(np.int32), np.ones(3, np.int32), "valid") == 3
     if not run.any() or not inside[np.argmax(run)]:
-        return crown_prop, "proportion"  # mask runs off the frame or never ends
-    crown_mask = pts[np.argmax(run)]
-    agree = float((crown_mask - chin) @ up) / (config.CROWN_K * ec)
+        return cues  # mask runs off the frame or never ends
+    cues["mask"] = pts[np.argmax(run)]
+    cues["agree"] = float((cues["mask"] - chin) @ up) / (config.CROWN_K * ec)
+    return cues
+
+
+def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
+    """Crown point (x, y) and which cues were used."""
+    cues = crown_cues(lm, alpha)
     lo, hi = config.CROWN_MASK_AGREE
-    if lo <= agree <= hi:
-        return 0.5 * (crown_prop + crown_mask), "mask+proportion"
-    return crown_prop, "proportion"
+    if cues["mask"] is not None and lo <= cues["agree"] <= hi:
+        return 0.5 * (cues["proportion"] + cues["mask"]), "mask+proportion"
+    return cues["proportion"], "proportion"
 
 
 def measure(lm: np.ndarray, alpha: np.ndarray | None = None) -> dict:
