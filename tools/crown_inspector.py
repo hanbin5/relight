@@ -9,10 +9,14 @@ accepted, its weight, and the head and face shares, and the 300 DPI photo each c
 save: head mode sizes the head with its hair (the default), face mode sizes chin to skull top
 and only keeps the crop clear of the hair (config.CROP_MODE).
 
-Click the photo to mark the true crown (top of the head, hair included); right-click
-clears the mark. Marks are kept in out/crown_marks.json. With marks, the panel shows the
-head-length error in mm (target: within +-1 mm, plan C.1) and the k and mask weight that
-fit the marked photos best. Demo faces are marked automatically from the renderer's person mask.
+Click the photo to mark the true crown (the highest point of the hair outline, flyaway
+strands left out); right-click clears it. Shift+click marks the true skull top where it can
+be seen (hair flattened under a cap or band, or very short hair); Shift+right-click clears it.
+A very short-haired photo can carry both marks. Marks are kept in out/crown_marks.json.
+Crown marks give the head-length error in mm (target: within +-1 mm, plan C.1), the mask
+weight that fits best and, in face mode, whether the hair would be cut. Skull marks give the
+face-size error of face mode and the k that fits the skull, which is what "Use fitted k"
+uses when there are any. Demo faces are marked automatically from the renderer's person mask.
 Left and right arrow keys switch photos.
 """
 
@@ -41,7 +45,7 @@ MARKS = ROOT / "out" / "crown_marks.json"
 DEFAULT_K, DEFAULT_AGREE, DEFAULT_WEIGHT = config.CROWN_K, config.CROWN_MASK_AGREE, config.CROWN_MASK_WEIGHT
 
 C_PROP, C_MASK, C_CROWN, C_CHIN, C_EYE = "#f39c12", "#8e44ad", "#e74c3c", "#27ae60", "#2f6fdf"
-C_TRUTH, C_BOX, C_BOX_OUT, C_FACE = "#e91e8c", "#2f6fdf", "#e0712c", "#16a085"
+C_TRUTH, C_BOX, C_BOX_OUT, C_FACE, C_SKULL_TRUTH = "#e91e8c", "#2f6fdf", "#e0712c", "#16a085", "#00bcd4"
 
 DEMO_SCENES = [
     dict(face_height=0.40, center=(0.50, 0.50)),
@@ -58,7 +62,8 @@ class Sample:
     def __init__(self, name: str, path: str | None = None, scene: dict | None = None):
         self.name, self.path, self.scene = name, path, scene
         self.ctx = None
-        self.truth = None  # (x, y) of the true crown in live-frame pixels
+        self.truth = None  # (x, y) of the true crown (hair top) in live-frame pixels
+        self.skull = None  # (x, y) of the true skull top, where it can be seen (hair flattened or very short)
         self.auto_truth = False
 
     @property
@@ -132,18 +137,32 @@ def evaluate(sample: Sample, fmt_key: str, share: float, use_mask: bool, face_sh
                    unit=unit, k_true=true_len / cues["ec"])
         fy0, fy1 = face["box"][1], face["box"][3]
         out["true_hair_top"] = (float(sample.truth[1]) - fy0) / (fy1 - fy0)  # < 0: hair cut off
+    if sample.skull is not None:
+        chin, up = geo["chin"], cues["up"]
+        est_len = float((geo["skull"] - chin) @ up)
+        true_len = float((sample.skull - chin) @ up)
+        h_face = face["box"][3] - face["box"][1]
+        doc_h, unit = (fmt.size_mm[1], "mm") if fmt.size_mm else (fmt.size_px[1], "px")
+        out.update(face_err=(est_len - true_len) / h_face * doc_h, face_unit=unit,
+                   k_skull=true_len / cues["ec"], skull_err_px=est_len - true_len)
+        if sample.truth is not None:  # hair thickness above the skull, in face-mode photo units
+            out["hair_thickness"] = float((sample.truth - sample.skull) @ up) / h_face * doc_h
     return out
 
 
-def fitted_k(samples) -> tuple:
-    """Least-squares k for the proportion rule over the marked samples: sum(ec d) / sum(ec^2)."""
+def fitted_k(samples, kind: str = "crown") -> tuple:
+    """Least-squares k for the proportion rule over the marked samples: sum(ec d) / sum(ec^2).
+
+    kind "crown" fits the hair-top marks, "skull" the skull-top marks.
+    """
     num = den = 0.0
     n = 0
     for s in samples:
-        if s.truth is None or s.ctx is None or s.ctx.landmarks is None:
+        mark = s.skull if kind == "skull" else s.truth
+        if mark is None or s.ctx is None or s.ctx.landmarks is None:
             continue
         cues = geometry.crown_cues(s.ctx.landmarks)
-        d = float((s.truth - s.ctx.landmarks[mesh.CHIN, :2]) @ cues["up"])
+        d = float((mark - s.ctx.landmarks[mesh.CHIN, :2]) @ cues["up"])
         num, den, n = num + cues["ec"] * d, den + cues["ec"] ** 2, n + 1
     return (num / den if den else None), n
 
@@ -172,13 +191,14 @@ def fitted_weight(samples) -> tuple:
 
 
 class FrameView(QWidget):
-    marked = Signal(object)  # (x, y) in frame pixels, or None to clear
+    marked = Signal(object, str)  # (x, y) in frame pixels or None to clear; "crown" or "skull" (Shift)
 
     def __init__(self):
         super().__init__()
         self.image = None
         self.result = None
         self.truth = None
+        self.skull = None
         self.agree = DEFAULT_AGREE
         self.use_mask = True
         self.setMinimumSize(560, 400)
@@ -193,13 +213,14 @@ class FrameView(QWidget):
     def mousePressEvent(self, event):
         if self.image is None:
             return
+        kind = "skull" if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else "crown"
         if event.button() == Qt.MouseButton.RightButton:
-            self.marked.emit(None)
+            self.marked.emit(None, kind)
             return
         s, ox, oy = self._transform()
         x, y = (event.position().x() - ox) / s, (event.position().y() - oy) / s
         if 0 <= x < self.image.width() and 0 <= y < self.image.height():
-            self.marked.emit(np.array([x, y], np.float32))
+            self.marked.emit(np.array([x, y], np.float32), kind)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -258,9 +279,15 @@ class FrameView(QWidget):
             p.setPen(QPen(QColor(C_TRUTH), 2, Qt.PenStyle.DashLine))
             p.drawLine(v(t - half * left), v(t + half * left))
             self._marker(p, v(t), C_TRUTH, "+")
+        if self.skull is not None:
+            t = self.skull
+            p.setPen(QPen(QColor(C_SKULL_TRUTH), 2, Qt.PenStyle.DashLine))
+            p.drawLine(v(t - half * left), v(t + half * left))
+            self._marker(p, v(t), C_SKULL_TRUTH, "+")
         # Legend.
         items = [("x - - proportion cue = skull top", C_PROP), ("o mask cue", C_MASK), ("— crown (used)", C_CROWN),
-                 ("— chin", C_CHIN), ("- - true crown (click)", C_TRUTH),
+                 ("— chin", C_CHIN), ("- - true crown = hair top (click)", C_TRUTH),
+                 ("- - true skull top (Shift+click)", C_SKULL_TRUTH),
                  ("[ ] head-mode crop (dashed)", C_BOX), ("[ ] face-mode crop (dotted)", C_FACE)]
         if self.use_mask:
             items.append(("| mask cue accepted here", "#2ecc71"))
@@ -455,8 +482,12 @@ class Inspector(QMainWindow):
         except (OSError, ValueError):
             marks = {}
         for s in self.samples:
-            if s.key in marks:
-                s.truth = np.array(marks[s.key], np.float32)
+            m = marks.get(s.key)
+            if isinstance(m, list):  # older files held the crown only
+                m = {"crown": m}
+            if m:
+                s.truth = np.array(m["crown"], np.float32) if m.get("crown") else None
+                s.skull = np.array(m["skull"], np.float32) if m.get("skull") else None
 
     def _save_marks(self):
         try:
@@ -464,21 +495,29 @@ class Inspector(QMainWindow):
         except (OSError, ValueError):
             marks = {}
         for s in self.samples:
-            if s.auto_truth:
-                continue
-            if s.truth is None:
-                marks.pop(s.key, None)
+            m = {}
+            if s.truth is not None and not s.auto_truth:
+                m["crown"] = [float(x) for x in s.truth]
+            if s.skull is not None:
+                m["skull"] = [float(x) for x in s.skull]
+            if m:
+                marks[s.key] = m
             else:
-                marks[s.key] = [float(x) for x in s.truth]
+                marks.pop(s.key, None)
         MARKS.parent.mkdir(parents=True, exist_ok=True)
         MARKS.write_text(json.dumps(marks, indent=2, ensure_ascii=False))
 
-    def set_mark(self, pt):
+    def set_mark(self, pt, kind: str = "crown"):
         sample = self.samples[self.index]
-        sample.truth, sample.auto_truth = pt, False
+        if kind == "skull":
+            sample.skull = pt
+            what = "Skull top"
+        else:
+            sample.truth, sample.auto_truth = pt, False
+            what = "Crown (hair top)"
         self._save_marks()
         self.refresh()
-        self.say("Mark cleared." if pt is None else "True crown marked and saved.")
+        self.say(f"{what} mark cleared." if pt is None else f"{what} marked and saved.")
 
     def say(self, text: str):
         self.status.setText(text)
@@ -505,16 +544,21 @@ class Inspector(QMainWindow):
                  f"mask weight {DEFAULT_WEIGHT:.2f}.")
 
     def use_fitted_k(self):
-        k, n = fitted_k(self.samples)
+        # k is the eyes-halfway rule for the skull, so skull marks win when there are any.
+        k, n = fitted_k(self.samples, "skull")
+        basis = "skull-top"
         if k is None:
-            self.say("No marks yet: click the top of the head on at least one photo first.")
+            k, n = fitted_k(self.samples)
+            basis = "hair-top"
+        if k is None:
+            self.say("No marks yet: click the top of the head (or Shift+click the skull top) on a photo first.")
             return
         s = self.sliders["k"][0]
         s.setValue(int(round(k * 100)))
         if abs(s.value() / 100 - k) > 0.006:
             self.say(f"Fitted k {k:.2f} is outside the slider range ({s.minimum() / 100:.2f}–{s.maximum() / 100:.2f}): check the marks.")
         else:
-            self.say(f"k set to {k:.2f}, fitted to {n} marked photo(s).")
+            self.say(f"k set to {k:.2f}, fitted to the {basis} marks of {n} photo(s).")
 
     def use_fitted_weight(self):
         w, n = fitted_weight(self.samples)
@@ -580,6 +624,7 @@ class Inspector(QMainWindow):
         fmt_key, share, use_mask = self.fmt.currentText(), self.value("share"), self.use_mask.isChecked()
         r = evaluate(sample, fmt_key, share, use_mask, self.value("face"))
         self.view.image, self.view.result, self.view.truth = to_qimage(img), r, sample.truth
+        self.view.skull = sample.skull
         self.view.agree, self.view.use_mask = config.CROWN_MASK_AGREE, use_mask
         self.view.update()
         self.readout.setText(self._readout(sample, r, fmt_key, share, use_mask))
@@ -630,6 +675,16 @@ class Inspector(QMainWindow):
                          f"<span style='color:{col}'><b>{100 * th:.1f}%</b> ({verdict})</span>")
         else:
             lines.append("<br>Click the top of the head to mark the true crown.")
+        if "face_err" in r:
+            err = r["face_err"]
+            good = abs(err) <= 1.0 if r["face_unit"] == "mm" else True
+            lines.append(f"Skull mark: face-size error "
+                         f"<span style='color:{'#2a7a3b' if good else '#c0392b'}'><b>{err:+.2f} {r['face_unit']}</b></span>"
+                         f" ({r['skull_err_px']:+.1f} px); k from the skull {r['k_skull']:.2f}")
+            if "hair_thickness" in r:
+                lines.append(f"Hair above the skull: {r['hair_thickness']:.1f} {r['face_unit']}")
+        else:
+            lines.append("Shift+click the skull top if it shows (hair flattened or very short).")
         evals = [x for s in self.samples if s.truth is not None
                  for x in [evaluate(s, fmt_key, share, use_mask, self.value("face"))] if x is not None and "head_err" in x]
         errs = [x["head_err"] for x in evals]
@@ -645,6 +700,14 @@ class Inspector(QMainWindow):
             w, nw = fitted_weight(self.samples)
             if w is not None:
                 lines.append(f"Fitted mask weight <b>{w:.2f}</b> from the {nw} marked photo(s) that use the mask cue")
+        skull_evals = [x for s in self.samples if s.skull is not None
+                       for x in [evaluate(s, fmt_key, share, use_mask, self.value("face"))] if x is not None and "face_err" in x]
+        if skull_evals:
+            ks, nk = fitted_k(self.samples, "skull")
+            fe = [x["face_err"] for x in skull_evals]
+            unit = skull_evals[0]["face_unit"]
+            lines.append(f"<b>All {nk} skull marks</b>: face-size mean |error| {np.mean(np.abs(fe)):.2f} {unit}, "
+                         f"max {np.max(np.abs(fe)):.2f} {unit}; fitted k (skull) <b>{ks:.2f}</b>")
         return "<br>".join(lines)
 
     def closeEvent(self, event):
