@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from idphoto import color, config, npimg
-from idphoto.capture import Camera
+from idphoto.capture import open_camera
 from idphoto.landmarks import FaceLandmarkDetector
 from idphoto.pipeline import Pipeline, Settings, to_live
 
@@ -54,22 +54,23 @@ def main() -> int:
     import cv2
 
     try:
-        camera = Camera(args.camera)
+        camera = open_camera(args.camera)
     except RuntimeError:
         time.sleep(3)  # the first attempt may only have shown the permission request
-        camera = Camera(args.camera)
+        camera = open_camera(args.camera)
     folder = Path(args.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
     detector = FaceLandmarkDetector()
     pipeline, settings = Pipeline(detector), Settings()
-    warmup = config.WARMUP_S + 0.5  # let auto exposure settle first
-    start, n, saved = time.monotonic(), 0, 0
-    while time.monotonic() - start < warmup + args.seconds:
+    start, recording_from, n, saved = time.monotonic(), None, 0, 0
+    while recording_from is None or time.monotonic() - recording_from < args.seconds:
+        if recording_from is None and time.monotonic() - start > config.WARMUP_MAX_S + 10:
+            raise SystemExit("The camera gave no frames (or never finished warming up).")
         frame, _ = camera.read()
-        if frame is None:
-            continue
-        if time.monotonic() - start < warmup:
-            continue
+        if frame is None or camera.lock_state == "warming":
+            continue  # the camera settles and locks first (at most WARMUP_MAX_S)
+        if recording_from is None:
+            recording_from = time.monotonic()
         live, _ = to_live(frame)
         ctx, _ = pipeline.process(live, settings, timestamp_ms=int(1000 * time.monotonic()), full_frame=frame)
         n += 1

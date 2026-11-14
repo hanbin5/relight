@@ -62,6 +62,8 @@ STRINGS = {
     "chin": {"en": "chin", "ko": "턱"},
     "lock_warming": {"en": "Camera warming up…", "ko": "카메라 준비 중…"},
     "lock_locked": {"en": "Exposure and white balance locked", "ko": "노출·화이트밸런스 고정됨"},
+    "lock_partial": {"en": "Exposure locked (white balance cannot be locked on this camera)",
+                     "ko": "노출 고정됨 (이 카메라는 화이트밸런스 고정 불가)"},
     "lock_unsupported": {"en": "Exposure lock unavailable: light averaged over 10 frames",
                          "ko": "노출 고정 미지원: 조명을 10프레임 평균으로 보정"},
     "lock_failed": {"en": "Exposure lock failed: light averaged over 10 frames",

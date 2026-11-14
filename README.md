@@ -80,11 +80,12 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/eval_synthetic.py` | Synthetic version of C.1: R_LR over a sweep of side lights, mask IoU against the true mask, staged faults and per-rule recall |
 | `uv run python tools/bench_fps.py` | Frames per second of the full live pipeline on this machine (target ≥ 10) |
 | `uv run python tools/process_image.py photo.jpg` | Runs the pipeline on still photos and saves the same files as the app |
+| `uv run python tools/check_lock.py` | Tests the webcam's exposure / white-balance lock on this machine: lock state, then brightness drift while you hold still. On macOS run it from a terminal that has camera access |
 | `uv run python tools/capture_frames.py` | Saves webcam frames, their landmarks and each matting step to `out/debug/` (debugging, test sets). On macOS run it from a terminal that has camera access |
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (55 tests, about 10 s).
+Tests: `uv run pytest` (85 tests, about 10 s).
 
 ## Results so far
 
@@ -115,7 +116,7 @@ These are choices made while implementing the drafts in Appendix B. Each is comm
 11. **Sharpness (rule 3)** is measured on the camera's full-resolution frame, so the 256 × 256 face crop is not an upsampled copy of the 640-px live frame. The bound of 120 is calibrated per camera as B.4 asks: after 15 frames it becomes 70% of the camera's sharp frames (the 80th percentile of the last 90), never above 120 and never below 15. A MacBook webcam scores 40–50 and could never pass 120.
 12. **Rule 7:** the hair band is everything above the mouth within 1.1 face widths of the midline. Contrast compares the top with the background in the same rows, on each side of the neck, and the weaker side counts. When the cutout fails, the message asks for a top unlike the wall (low contrast), for a plain wall (less than 70% of the background is one color), or to move away from the wall.
 13. **Crown:** the mask-top cue is used (averaged with the proportion rule) only when the two agree within 0.85–1.25 of the proportion's head length.
-14. **Exposure lock:** OpenCV's macOS backend has no exposure control, so the lock is reported as unavailable there and the light is averaged over 10 frames instead of 5 (the C.4 fallback). The same fallback applies when face brightness drifts more than 3% while the head holds still.
+14. **Exposure lock:** on macOS the camera is read through AVFoundation (pyobjc), because OpenCV's macOS backend has no exposure control. `AVCaptureDevice` offers what the hardware supports: the built-in MacBook camera supports neither lock, and an external Brio 300 supports the exposure lock only (state `partial`). Where nothing can be locked (`unsupported`), the lock did not hold (`failed`) or face brightness drifts more than 3% while the head holds still (`drifting`), the light is averaged over 10 frames instead of 5 (the C.4 fallback). The lock is set after at least 1.5 s and once the mean brightness is steady (at most 5 s); `tools/check_lock.py` tests it on a machine.
 15. **Rule 7 fallback (C.4):** if the cutout check fails when a photo is taken, the saved photo keeps the original wall and the result window says so.
 16. **Print sheets** are made for the résumé and ID formats; the profile photo is for screens.
 

@@ -12,6 +12,9 @@ REF_WIDTH = 640  # pixel radii below are given at this width
 
 # B.2 Camera lock and real-time relighting ----------------------------------------------
 WARMUP_S = 1.5  # let auto exposure / white balance settle, then lock
+WARMUP_MAX_S = 5.0  # lock anyway after this long, even if the brightness keeps moving
+WARMUP_SETTLE_FRAMES = 5  # the lock waits for this many frames of steady brightness
+WARMUP_SETTLE_DRIFT = 0.02  # ... whose mean brightness spreads at most 2%
 LOCK_CHECK_S = 1.0  # hold-still window for the lock check
 LOCK_MAX_DRIFT = 0.03  # face brightness may drift at most 3% while holding still
 FIT_SIZE = 128  # light is fitted on a FIT_SIZE x FIT_SIZE face crop
