@@ -1,6 +1,6 @@
 # Part D: checker and evaluation — steps
 
-Owner: D. Branch: `subpart-D`. Plan sections: B.4 (rules), C.1 (evaluation), Appendix D (blind rating, usability test).
+Owner: D. Branch: `module-d/checker-eval`. Plan sections: B.4 (rules), C.1 (evaluation), Appendix D (blind rating, usability test).
 
 The checker itself (`idphoto/checker.py`) and the auto shutter already work. What's left is testing them on real people and running the two studies.
 
