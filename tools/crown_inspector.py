@@ -1,0 +1,735 @@
+"""Crown and crop inspector: tune the crown estimate on still photos (plan B.5, C.1).
+
+    uv run python tools/crown_inspector.py photo1.jpg photo2.jpg
+    uv run python tools/crown_inspector.py --demo        # synthetic faces, no camera or model
+
+Left: the processed frame (not mirrored) with both crown cues, the final crown, the chin,
+the eye line and the crop box. Right: sliders for k, the band in which the mask cue is
+accepted, and the head and face shares, and the 300 DPI photo each crop mode would save: head
+mode sizes the head with its hair (the default), the experimental face mode sizes chin to skull
+top and only keeps the crop clear of the hair (config.CROP_MODE).
+
+Click the photo to mark the true crown (the highest point of the hair outline, flyaway
+strands left out); right-click clears it. Shift+click marks the true skull top where it can
+be seen (hair flattened under a cap or band, or very short hair); Shift+right-click clears it.
+A very short-haired photo can carry both marks. Marks are kept in out/crown_marks.json.
+Crown marks give the head-length error in mm (target: within +-1 mm, plan C.1) and, in face
+mode, whether the hair would be cut. Skull marks give the
+face-size error of face mode and the k that fits the skull, which is what "Use fitted k"
+uses when there are any. Demo faces are marked automatically from the renderer's person mask.
+Left and right arrow keys switch photos.
+
+Measurements use the live frame (640 px wide), as the app's on-screen guide does. A saved
+photo is re-rendered at full resolution; on our test photos its crown error differed from the
+inspector's by at most 0.4 mm (0.1 mm on most). The previews always show a white background,
+even where the app would keep the original wall because rule 7 failed.
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from idphoto import color, config, geometry, mesh, synthetic  # noqa: E402
+from idphoto.gui import to_qimage  # noqa: E402  (also clears OpenCV's Qt plugin path)
+from idphoto.pipeline import Pipeline, Settings, to_live  # noqa: E402
+
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal  # noqa: E402
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QShortcut  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+MARKS = ROOT / "out" / "crown_marks.json"
+DEFAULT_K, DEFAULT_AGREE = config.CROWN_K, config.CROWN_MASK_AGREE
+
+C_PROP, C_MASK, C_CROWN, C_CHIN, C_EYE = "#f39c12", "#8e44ad", "#e74c3c", "#27ae60", "#2f6fdf"
+C_TRUTH, C_BOX, C_BOX_OUT, C_FACE, C_SKULL_TRUTH = "#e91e8c", "#2f6fdf", "#e0712c", "#16a085", "#00bcd4"
+
+DEMO_SCENES = [
+    dict(face_height=0.40, center=(0.50, 0.50)),
+    dict(face_height=0.32, center=(0.46, 0.48), roll=4.0),
+    dict(face_height=0.46, center=(0.54, 0.56), light=(0.5, 0.3, 0.8)),
+]
+
+
+# ---------------------------------------------------------------------------------------
+# Samples: one processed frame each
+
+
+class Sample:
+    def __init__(self, name: str, path: str | None = None, scene: dict | None = None):
+        self.name, self.path, self.scene = name, path, scene
+        self.ctx = None
+        self.error = None  # why the photo could not be processed
+        self.truth = None  # (x, y) of the true crown (hair top) in live-frame pixels
+        self.skull = None  # (x, y) of the true skull top, where it can be seen (hair flattened or very short)
+        self.auto_truth = False
+
+    @property
+    def key(self) -> str:
+        return str(Path(self.path).resolve()) if self.path else f"demo:{self.name}"
+
+
+class Processor:
+    """Runs the pipeline once per sample (5 identical frames, like tools/process_image.py).
+
+    Landmarks are found in MediaPipe's IMAGE mode, so each photo is detected on its own. In
+    VIDEO mode the tracker carries over from the photo before, and the same photo's landmarks
+    (and crown error) changed with the order the photos were opened in.
+    """
+
+    def __init__(self):
+        self.detector = None
+        self.timestamp = 0
+
+    def run(self, sample: Sample):
+        if sample.scene is not None:
+            defaults = dict(width=960, height=540, ambient=0.25, light=(-0.55, 0.2, 0.8))
+            scene = synthetic.Scene(**{**defaults, **sample.scene})
+            rgb, lm, person = synthetic.render(scene)
+            live, lm_live = to_live(rgb, lm)
+            col = int(round(0.5 * (lm[mesh.IRIS_R, 0] + lm[mesh.IRIS_L, 0])))
+            rows = np.nonzero(person[:, col])[0]
+            if rows.size and sample.truth is None:
+                s = live.shape[1] / rgb.shape[1]
+                sample.truth, sample.auto_truth = np.array([(col + 0.5) * s, rows.min() * s], np.float32), True
+            pipe, frame = Pipeline(None), rgb
+        else:
+            from idphoto.capture import ImageSource
+
+            frame = ImageSource(sample.path).frame
+            live, lm_live = to_live(frame)
+            if self.detector is None:
+                from idphoto.landmarks import FaceLandmarkDetector
+
+                self.detector = FaceLandmarkDetector(video=False)
+            pipe = Pipeline(self.detector)
+        for _ in range(5):
+            self.timestamp += 33
+            ctx, _ = pipe.process(live, Settings(), landmarks=lm_live, timestamp_ms=self.timestamp, full_frame=frame)
+        sample.ctx = ctx
+
+    def close(self):
+        if self.detector is not None:
+            self.detector.close()
+
+
+# ---------------------------------------------------------------------------------------
+# Measurements for the current settings
+
+
+def evaluate(sample: Sample, fmt_key: str, share: float, use_mask: bool, face_share: float | None = None) -> dict | None:
+    """Both crops for the current settings: head mode (box) and face mode (face)."""
+    ctx = sample.ctx
+    if ctx is None or ctx.landmarks is None:
+        return None
+    alpha = ctx.alpha if use_mask else None
+    cues = geometry.crown_cues(ctx.landmarks, alpha)
+    geo = geometry.measure(ctx.landmarks, alpha)
+    fmt = geometry.FORMATS[fmt_key]
+    box = geometry.crop_box(geo, fmt, share, mode="head")
+    face = geometry.face_crop(geo, fmt, face_share)
+    out = {"cues": cues, "geo": geo, "box": box, "fits": geometry.crop_fits(box, ctx.size),
+           "face": face, "face_fits": geometry.crop_fits(face["box"], ctx.size)}
+    if sample.truth is not None:
+        chin, up = geo["chin"], cues["up"]
+        est_len = float((geo["crown"] - chin) @ up)
+        true_len = float((sample.truth - chin) @ up)
+        h_crop = box[3] - box[1]
+        doc_h, unit = (fmt.size_mm[1], "mm") if fmt.size_mm else (fmt.size_px[1], "px")
+        out.update(crown_err_px=est_len - true_len, head_err=(est_len - true_len) / h_crop * doc_h,
+                   unit=unit, k_true=true_len / cues["ec"])
+        fy0, fy1 = face["box"][1], face["box"][3]
+        out["true_hair_top"] = (float(sample.truth[1]) - fy0) / (fy1 - fy0)  # < 0: hair cut off
+    if sample.skull is not None:
+        chin, up = geo["chin"], cues["up"]
+        est_len = float((geo["skull"] - chin) @ up)
+        true_len = float((sample.skull - chin) @ up)
+        h_face = face["box"][3] - face["box"][1]
+        doc_h, unit = (fmt.size_mm[1], "mm") if fmt.size_mm else (fmt.size_px[1], "px")
+        out.update(face_err=(est_len - true_len) / h_face * doc_h, face_unit=unit,
+                   k_skull=true_len / cues["ec"], skull_err_px=est_len - true_len)
+        if sample.truth is not None:  # hair thickness above the skull, in face-mode photo units
+            out["hair_thickness"] = float((sample.truth - sample.skull) @ up) / h_face * doc_h
+    return out
+
+
+def fitted_k(samples, kind: str = "crown") -> tuple:
+    """Least-squares k for the proportion rule over the marked samples: sum(ec d) / sum(ec^2).
+
+    kind "crown" fits the hair-top marks, "skull" the skull-top marks.
+    """
+    num = den = 0.0
+    n = 0
+    for s in samples:
+        mark = s.skull if kind == "skull" else s.truth
+        if mark is None or s.ctx is None or s.ctx.landmarks is None:
+            continue
+        cues = geometry.crown_cues(s.ctx.landmarks)
+        d = float((mark - s.ctx.landmarks[mesh.CHIN, :2]) @ cues["up"])
+        num, den, n = num + cues["ec"] * d, den + cues["ec"] ** 2, n + 1
+    return (num / den if den else None), n
+
+
+# ---------------------------------------------------------------------------------------
+# Frame view
+
+
+class FrameView(QWidget):
+    marked = Signal(object, str)  # (x, y) in frame pixels or None to clear; "crown" or "skull" (Shift)
+
+    def __init__(self):
+        super().__init__()
+        self.image = None
+        self.result = None
+        self.truth = None
+        self.skull = None
+        self.agree = DEFAULT_AGREE
+        self.use_mask = True
+        self.setMinimumSize(560, 400)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def _transform(self):
+        iw, ih = self.image.width(), self.image.height()
+        s = min(self.width() / iw, self.height() / ih)
+        return s, (self.width() - iw * s) / 2, (self.height() - ih * s) / 2
+
+    def mousePressEvent(self, event):
+        if self.image is None:
+            return
+        kind = "skull" if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else "crown"
+        if event.button() == Qt.MouseButton.RightButton:
+            self.marked.emit(None, kind)
+            return
+        s, ox, oy = self._transform()
+        x, y = (event.position().x() - ox) / s, (event.position().y() - oy) / s
+        if 0 <= x < self.image.width() and 0 <= y < self.image.height():
+            self.marked.emit(np.array([x, y], np.float32), kind)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.fillRect(self.rect(), QColor("#2b2b2b"))
+        if self.image is None:
+            p.setPen(QColor("white"))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No frame")
+            return
+        s, ox, oy = self._transform()
+        p.drawImage(QRectF(ox, oy, self.image.width() * s, self.image.height() * s), self.image)
+        r = self.result
+        if r is None:
+            self._label(p, QPointF(12, 12), "No face found", "#c0392b")
+            return
+
+        def v(pt):
+            return QPointF(ox + float(pt[0]) * s, oy + float(pt[1]) * s)
+
+        cues, geo = r["cues"], r["geo"]
+        chin, up, ec, k = geo["chin"], cues["up"], cues["ec"], config.CROWN_K
+        # Midline, and the band in which the mask cue is accepted.
+        p.setPen(QPen(QColor(255, 255, 255, 110), 1))
+        p.drawLine(v(chin), v(chin + 1.4 * k * ec * up))
+        if self.use_mask:
+            lo, hi = self.agree
+            band = QPen(QColor(46, 204, 113, 90), 10)
+            band.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(band)
+            p.drawLine(v(chin + lo * k * ec * up), v(chin + hi * k * ec * up))
+        # Crop box.
+        x0, y0, x1, y1 = r["box"]
+        p.setPen(QPen(QColor(C_BOX if r["fits"] else C_BOX_OUT), 2, Qt.PenStyle.DashLine))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRectF(v((x0, y0)), v((x1, y1))))
+        fx0, fy0, fx1, fy1 = r["face"]["box"]
+        p.setPen(QPen(QColor(C_FACE if r["face_fits"] else C_BOX_OUT), 2, Qt.PenStyle.DotLine))
+        p.drawRect(QRectF(v((fx0, fy0)), v((fx1, fy1))))
+        # Eye line, chin, crown.
+        left = np.array([-up[1], up[0]], np.float32)  # across the face
+        half = 0.9 * ec
+        eye = geo["eye_center"]
+        self._cross_line(p, v(eye - half * left), v(eye + half * left), C_EYE, 1)
+        self._cross_line(p, v(chin - half * left), v(chin + half * left), C_CHIN, 2, "chin")
+        crown = geo["crown"]
+        self._cross_line(p, v(crown - half * left), v(crown + half * left), C_CROWN, 2, "crown")
+        skull = geo["skull"]
+        p.setPen(QPen(QColor(C_PROP), 1.5, Qt.PenStyle.DashLine))
+        p.drawLine(v(skull - half * left), v(skull + half * left))
+        self._marker(p, v(cues["proportion"]), C_PROP, "x")
+        if cues["mask"] is not None:
+            self._marker(p, v(cues["mask"]), C_MASK, "o")
+        if self.truth is not None:
+            t = self.truth
+            p.setPen(QPen(QColor(C_TRUTH), 2, Qt.PenStyle.DashLine))
+            p.drawLine(v(t - half * left), v(t + half * left))
+            self._marker(p, v(t), C_TRUTH, "+")
+        if self.skull is not None:
+            t = self.skull
+            p.setPen(QPen(QColor(C_SKULL_TRUTH), 2, Qt.PenStyle.DashLine))
+            p.drawLine(v(t - half * left), v(t + half * left))
+            self._marker(p, v(t), C_SKULL_TRUTH, "+")
+        # Legend.
+        items = [("x - - proportion cue = skull top", C_PROP), ("o mask cue", C_MASK), ("— crown (used)", C_CROWN),
+                 ("— chin", C_CHIN), ("- - true crown = hair top (click)", C_TRUTH),
+                 ("- - true skull top (Shift+click)", C_SKULL_TRUTH),
+                 ("[ ] head-mode crop (dashed)", C_BOX), ("[ ] face-mode crop (dotted)", C_FACE)]
+        if self.use_mask:
+            items.append(("| mask cue accepted here", "#2ecc71"))
+        y = 10
+        for text, col in items:
+            y += self._label(p, QPointF(10, y), text, col) + 4
+
+    def _cross_line(self, p, a, b, col, width, text=None):
+        p.setPen(QPen(QColor(col), width))
+        p.drawLine(a, b)
+        if text:
+            self._label(p, QPointF(b.x() + 6, b.y() - 10), text, col)
+
+    def _marker(self, p, at, col, kind):
+        p.setPen(QPen(QColor(col), 2.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        d = 7
+        if kind == "x":
+            p.drawLine(at + QPointF(-d, -d), at + QPointF(d, d))
+            p.drawLine(at + QPointF(-d, d), at + QPointF(d, -d))
+        elif kind == "+":
+            p.drawLine(at + QPointF(-d, 0), at + QPointF(d, 0))
+            p.drawLine(at + QPointF(0, -d), at + QPointF(0, d))
+        else:
+            p.drawEllipse(at, d, d)
+
+    def _label(self, p, at, text, col) -> float:
+        m = p.fontMetrics()
+        rect = QRectF(at.x(), at.y(), m.horizontalAdvance(text) + 10, m.height() + 4)
+        p.fillRect(rect, QColor(0, 0, 0, 215))
+        p.setPen(QColor(col))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        return rect.height()
+
+
+class Preview(QWidget):
+    """The saved photo, scaled to whatever room the panel leaves (never over the buttons)."""
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = None
+        self.setMinimumHeight(220)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+
+    def set_pixmap(self, pixmap):
+        self.pixmap = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        if self.pixmap is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        pw, ph = self.pixmap.width(), self.pixmap.height()
+        s = min(self.width() / pw, self.height() / ph)
+        w, h = pw * s, ph * s
+        p.drawPixmap(QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h), self.pixmap, QRectF(self.pixmap.rect()))
+
+
+# ---------------------------------------------------------------------------------------
+# Main window
+
+
+class Inspector(QMainWindow):
+    def __init__(self, samples):
+        super().__init__()
+        self.samples, self.index = samples, 0
+        self.processor = Processor()
+        self._load_marks()
+        self.setWindowTitle("Crown and crop inspector")
+        self.view = FrameView()
+        self.view.marked.connect(self.set_mark)
+
+        panel = QWidget()
+        panel.setMinimumHeight(980)  # taller than the window: the scroll area takes the rest
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(16, 12, 16, 12)
+
+        nav = QHBoxLayout()
+        prev_b, next_b = QPushButton("◀"), QPushButton("▶")
+        prev_b.clicked.connect(lambda: self.show_sample(self.index - 1))
+        next_b.clicked.connect(lambda: self.show_sample(self.index + 1))
+        self.name = QLabel()
+        self.name.setWordWrap(True)
+        nav.addWidget(prev_b)
+        nav.addWidget(self.name, 1)
+        nav.addWidget(next_b)
+        v.addLayout(nav)
+
+        grid = QGridLayout()
+        self.layer = QComboBox()
+        self.layer.addItems(["processed frame", "original frame", "alpha mask"])
+        self.layer.currentIndexChanged.connect(self.refresh)
+        self.fmt = QComboBox()
+        for key in geometry.FORMATS:
+            self.fmt.addItem(key)
+        self.fmt.currentTextChanged.connect(self.format_changed)
+        grid.addWidget(QLabel("Show"), 0, 0)
+        grid.addWidget(self.layer, 0, 1, 1, 2)
+        grid.addWidget(QLabel("Format"), 1, 0)
+        grid.addWidget(self.fmt, 1, 1, 1, 2)
+        self.sliders = {}
+        rows = [("k", "k", 150, 260, DEFAULT_K * 100), ("lo", "mask band low", 50, 100, DEFAULT_AGREE[0] * 100),
+                ("hi", "mask band high", 100, 170, DEFAULT_AGREE[1] * 100),
+                ("share", "head share", 40, 90, 75),
+                ("face", "face share", 40, 90, geometry.FORMATS["resume"].face_share * 100)]
+        for r, (key, text, lo, hi, val) in enumerate(rows, start=2):
+            s = QSlider(Qt.Orientation.Horizontal)
+            s.setRange(lo, hi)
+            s.setValue(int(round(val)))
+            value = QLabel()
+            value.setMinimumWidth(44)
+            s.valueChanged.connect(self.refresh)
+            grid.addWidget(QLabel(text), r, 0)
+            grid.addWidget(s, r, 1)
+            grid.addWidget(value, r, 2)
+            self.sliders[key] = (s, value)
+        v.addLayout(grid)
+        self.use_mask = QCheckBox("Use the mask cue")
+        self.use_mask.setChecked(True)
+        self.use_mask.toggled.connect(self.refresh)
+        v.addWidget(self.use_mask)
+
+        self.readout = QLabel()
+        self.readout.setTextFormat(Qt.TextFormat.RichText)
+        self.readout.setWordWrap(True)
+        self.readout.setStyleSheet("background: #f6f6f4; border: 1px solid #ddd; border-radius: 6px; padding: 8px;")
+        v.addWidget(self.readout)
+
+        previews = QHBoxLayout()
+        self.previews = {}
+        for mode, text in (("head", "Head mode: head with hair"), ("face", "Face mode (experimental): chin to skull")):
+            col = QVBoxLayout()
+            cap = QLabel()
+            cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cap.setWordWrap(True)
+            prev = Preview()
+            col.addWidget(cap)
+            col.addWidget(prev, 1)
+            previews.addLayout(col, 1)
+            self.previews[mode] = (cap, prev, text)
+        v.addLayout(previews, 1)
+
+        buttons = QHBoxLayout()
+        reset = QPushButton("Reset")
+        reset.setToolTip("Back to the values in idphoto/config.py")
+        reset.clicked.connect(self.reset)
+        use_fit = QPushButton("Use fitted k")
+        use_fit.setToolTip("k that fits the marked photos best, from the proportion cue alone")
+        use_fit.clicked.connect(self.use_fitted_k)
+        copy = QPushButton("Copy config")
+        copy.setToolTip("Copy the CROWN_K and CROWN_MASK_AGREE values for idphoto/config.py")
+        copy.clicked.connect(self.copy_config)
+        for b in (reset, use_fit, copy):
+            buttons.addWidget(b)
+        v.addLayout(buttons)
+        self.status = QLabel()  # what the last button did, so no click goes unanswered
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("color: #2f6fdf;")
+        v.addWidget(self.status)
+        self.status_timer = QTimer(self)
+        self.status_timer.setSingleShot(True)
+        self.status_timer.timeout.connect(self.status.clear)
+
+        central = QWidget()
+        lay = QHBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.view, 1)
+        scroll = QScrollArea()  # a long readout scrolls instead of squeezing the previews over the buttons
+        scroll.setWidget(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(400)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lay.addWidget(scroll)
+        self.setCentralWidget(central)
+        self.resize(1320, 820)
+        QShortcut(QKeySequence(Qt.Key.Key_Left), self, lambda: self.show_sample(self.index - 1))
+        QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self.show_sample(self.index + 1))
+        QTimer.singleShot(0, self.process_all)
+
+    # -- marks ---------------------------------------------------------------------------
+    def _load_marks(self):
+        try:
+            marks = json.loads(MARKS.read_text())
+        except (OSError, ValueError):
+            marks = {}
+        for s in self.samples:
+            m = marks.get(s.key)
+            if isinstance(m, list):  # older files held the crown only
+                m = {"crown": m}
+            if m:
+                s.truth = np.array(m["crown"], np.float32) if m.get("crown") else None
+                s.skull = np.array(m["skull"], np.float32) if m.get("skull") else None
+
+    def _save_marks(self):
+        try:
+            marks = json.loads(MARKS.read_text())
+        except (OSError, ValueError):
+            marks = {}
+        for s in self.samples:
+            m = {}
+            if s.truth is not None and not s.auto_truth:
+                m["crown"] = [float(x) for x in s.truth]
+            if s.skull is not None:
+                m["skull"] = [float(x) for x in s.skull]
+            if m:
+                marks[s.key] = m
+            else:
+                marks.pop(s.key, None)
+        MARKS.parent.mkdir(parents=True, exist_ok=True)
+        MARKS.write_text(json.dumps(marks, indent=2, ensure_ascii=False))
+
+    def set_mark(self, pt, kind: str = "crown"):
+        sample = self.samples[self.index]
+        if kind == "skull":
+            sample.skull = pt
+            what = "Skull top"
+        else:
+            sample.truth, sample.auto_truth = pt, False
+            what = "Crown (hair top)"
+        self._save_marks()
+        self.refresh()
+        self.say(f"{what} mark cleared." if pt is None else f"{what} marked and saved.")
+
+    def say(self, text: str):
+        self.status.setText(text)
+        self.status_timer.start(4000)
+
+    # -- settings ------------------------------------------------------------------------
+    def value(self, key) -> float:
+        return self.sliders[key][0].value() / 100
+
+    def format_changed(self, key):
+        fmt = geometry.FORMATS[key]
+        for name, val in (("share", fmt.head_share), ("face", fmt.face_share)):
+            s = self.sliders[name][0]
+            s.blockSignals(True)
+            s.setValue(int(round(val * 100)))
+            s.blockSignals(False)
+        self.refresh()
+
+    def reset(self):
+        for key, val in (("k", DEFAULT_K), ("lo", DEFAULT_AGREE[0]), ("hi", DEFAULT_AGREE[1])):
+            self.sliders[key][0].setValue(int(round(val * 100)))
+        self.format_changed(self.fmt.currentText())  # also resets the head and face shares
+        self.say(f"Back to config.py: k {DEFAULT_K:.2f}, mask band {DEFAULT_AGREE[0]:.2f}–{DEFAULT_AGREE[1]:.2f}.")
+
+    def use_fitted_k(self):
+        # k is the eyes-halfway rule for the skull, so skull marks win when there are any.
+        k, n = fitted_k(self.samples, "skull")
+        basis = "skull-top"
+        if k is None:
+            k, n = fitted_k(self.samples)
+            basis = "hair-top"
+        if k is None:
+            self.say("No marks yet: click the top of the head (or Shift+click the skull top) on a photo first.")
+            return
+        s = self.sliders["k"][0]
+        s.setValue(int(round(k * 100)))
+        if abs(s.value() / 100 - k) > 0.006:
+            self.say(f"Fitted k {k:.2f} is outside the slider range ({s.minimum() / 100:.2f}–{s.maximum() / 100:.2f}): check the marks.")
+        else:
+            self.say(f"k set to {k:.2f}, fitted to the {basis} marks of {n} photo(s).")
+
+    def copy_config(self):
+        text = (f"CROWN_K = {self.value('k'):.2f}\n"
+                f"CROWN_MASK_AGREE = ({self.value('lo'):.2f}, {self.value('hi'):.2f})\n")
+        QApplication.clipboard().setText(text)
+        print(text, end="")
+        self.say("Copied to the clipboard (also printed in the terminal). In idphoto/config.py, replace the values on the CROWN_K and CROWN_MASK_AGREE lines (keep the comments).")
+
+    # -- display -------------------------------------------------------------------------
+    def process_all(self):
+        """Process every photo once, before any slider moves.
+
+        The fits and totals then cover every marked photo, not only the ones visited, and every
+        mask is computed with config.py's k (the matting uses k for its head prior): the k
+        slider changes only the crown check, never the masks.
+        """
+        # The controls stay off while photos are processed, so no slider, button or click can
+        # act on a half-loaded set; k is reset before every photo all the same.
+        self.centralWidget().setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for n, sample in enumerate(self.samples, start=1):
+                self.name.setText(f"Processing {n}/{len(self.samples)}: {sample.name}…")
+                QApplication.processEvents()
+                try:
+                    config.CROWN_K = DEFAULT_K
+                    self.processor.run(sample)
+                except Exception as exc:  # keep the window; show it on that photo
+                    sample.ctx, sample.error = None, str(exc)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.centralWidget().setEnabled(True)
+        failed = sum(s.error is not None for s in self.samples)
+        if failed:
+            self.say(f"{failed} photo(s) could not be processed; they show the reason and cannot be marked.")
+        self.show_sample(0)
+
+    def show_sample(self, i: int):
+        if len(self.samples) == 1 and i != 0:
+            self.say("Only one photo is open. Pass several, e.g. out/photos/*.jpg")
+        self.index = i % len(self.samples)
+        sample = self.samples[self.index]
+        if sample.ctx is None:  # unreadable or failed: clear the view so no stale photo can be marked
+            self.name.setText(f"<b>{self.index + 1}/{len(self.samples)}</b> {sample.name}: "
+                              f"{sample.error or 'not processed'}")
+            self.view.image, self.view.result = None, None
+            self.view.update()
+            self.readout.clear()
+            for _, prev, _ in self.previews.values():
+                prev.set_pixmap(None)
+            return
+        self.name.setText(f"<b>{self.index + 1}/{len(self.samples)}</b> {sample.name}")
+        self.refresh()
+
+    def refresh(self, *_):
+        config.CROWN_K = self.value("k")
+        config.CROWN_MASK_AGREE = (self.value("lo"), self.value("hi"))
+        self.sliders["k"][1].setText(f"{self.value('k'):.2f}")
+        self.sliders["lo"][1].setText(f"{self.value('lo'):.2f}")
+        self.sliders["hi"][1].setText(f"{self.value('hi'):.2f}")
+        self.sliders["share"][1].setText(f"{self.sliders['share'][0].value()}%")
+        self.sliders["face"][1].setText(f"{self.sliders['face'][0].value()}%")
+        sample = self.samples[self.index]
+        ctx = sample.ctx
+        if ctx is None:
+            return
+        layer = self.layer.currentIndex()
+        if layer == 0:
+            img = color.encode_u8(ctx.output_frame)
+        elif layer == 1:
+            img = ctx.raw_frame
+        else:
+            a = np.clip(ctx.alpha * 255 + 0.5, 0, 255).astype(np.uint8)
+            img = np.repeat(a[..., None], 3, axis=2)
+        fmt_key, share, use_mask = self.fmt.currentText(), self.value("share"), self.use_mask.isChecked()
+        r = evaluate(sample, fmt_key, share, use_mask, self.value("face"))
+        self.view.image, self.view.result, self.view.truth = to_qimage(img), r, sample.truth
+        self.view.skull = sample.skull
+        self.view.agree, self.view.use_mask = config.CROWN_MASK_AGREE, use_mask
+        self.view.update()
+        self.readout.setText(self._readout(sample, r, fmt_key, share, use_mask))
+        fmt = geometry.FORMATS[fmt_key]
+        for mode, (cap, prev, text) in self.previews.items():
+            active = " <b>(app now)</b>" if config.CROP_MODE == mode else ""
+            cap.setText(text + active)
+            if r is None:
+                prev.set_pixmap(None)
+                continue
+            box = r["box"] if mode == "head" else r["face"]["box"]
+            photo = geometry.render_photo(ctx.output_frame, box, fmt, color.hex_to_linear("#ffffff"))
+            prev.set_pixmap(QPixmap.fromImage(to_qimage(photo)))
+
+    def _readout(self, sample, r, fmt_key, share, use_mask) -> str:
+        if r is None:
+            return "No face found in this photo."
+        geo, cues = r["geo"], r["cues"]
+        if not use_mask:
+            mask = "off"
+        elif cues["mask"] is None:
+            mask = "not found (mask runs off the frame or never ends)"
+        else:
+            lo, hi = config.CROWN_MASK_AGREE
+            ok = lo <= cues["agree"] <= hi
+            mask = f"agree {cues['agree']:.2f} → {'<b>used</b>' if ok else 'rejected'}"
+        lines = [
+            f"Crown source: <b>{geo['crown_source']}</b>",
+            f"Mask cue: {mask}",
+            f"Head length: {geo['head_length']:.1f} px (frame) · chin–eye {cues['ec']:.1f} px",
+            f"Crop: {'inside the frame' if r['fits'] else '<span style=\"color:#c0392b\">runs off the frame</span>'}",
+        ]
+        f = r["face"]
+        did = {"fits": "hair fits", "moved": "moved up for the hair", "zoomed": "zoomed out for the hair"}[f["action"]]
+        lines.append(f"Face mode: face {100 * f['face_share']:.0f}%, hair top {100 * f['hair_top']:.1f}% from the top, "
+                     f"chin at {100 * f['chin']:.0f}% ({did})")
+        if "head_err" in r:
+            err = r["head_err"]
+            good = abs(err) <= 1.0 if r["unit"] == "mm" else True
+            tag = " (auto from demo mask)" if sample.auto_truth else ""
+            lines.append(f"<br><b>This photo</b>{tag}: head-length error "
+                         f"<span style='color:{'#2a7a3b' if good else '#c0392b'}'><b>{err:+.2f} {r['unit']}</b></span>"
+                         f" ({r['crown_err_px']:+.1f} px); k from the mark {r['k_true']:.2f}")
+            th = r["true_hair_top"]
+            col = "#c0392b" if th < 0 else ("#e0712c" if th < config.HAIR_MARGIN_MIN else "#2a7a3b")
+            verdict = "cut off" if th < 0 else ("tight" if th < config.HAIR_MARGIN_MIN else "clear")
+            lines.append(f"Face mode with the true crown: hair top at "
+                         f"<span style='color:{col}'><b>{100 * th:.1f}%</b> ({verdict})</span>")
+        else:
+            lines.append("<br>Click the top of the head to mark the true crown.")
+        if "face_err" in r:
+            err = r["face_err"]
+            good = abs(err) <= 1.0 if r["face_unit"] == "mm" else True
+            lines.append(f"Skull mark: face-size error "
+                         f"<span style='color:{'#2a7a3b' if good else '#c0392b'}'><b>{err:+.2f} {r['face_unit']}</b></span>"
+                         f" ({r['skull_err_px']:+.1f} px); k from the skull {r['k_skull']:.2f}")
+            if "hair_thickness" in r:
+                lines.append(f"Hair above the skull: {r['hair_thickness']:.1f} {r['face_unit']}")
+        else:
+            lines.append("Shift+click the skull top if it shows (hair flattened or very short).")
+        evals = [x for s in self.samples if s.truth is not None
+                 for x in [evaluate(s, fmt_key, share, use_mask, self.value("face"))] if x is not None and "head_err" in x]
+        errs = [x["head_err"] for x in evals]
+        k, n = fitted_k(self.samples)
+        if n:
+            unit = "mm" if geometry.FORMATS[fmt_key].size_mm else "px"
+            lines.append(f"<b>All {n} marked</b>: mean |error| {np.mean(np.abs(errs)):.2f} {unit}, "
+                         f"max {np.max(np.abs(errs)):.2f} {unit}; fitted k (proportion only) <b>{k:.2f}</b>")
+            tops = [x["true_hair_top"] for x in evals]
+            cut = sum(t < 0 for t in tops)
+            lines.append(f"Face mode, all marked: true hair top {100 * min(tops):.1f}–{100 * max(tops):.1f}% from the top"
+                         + (f", <span style='color:#c0392b'><b>{cut} cut off</b></span>" if cut else ", none cut off"))
+        skull_evals = [x for s in self.samples if s.skull is not None
+                       for x in [evaluate(s, fmt_key, share, use_mask, self.value("face"))] if x is not None and "face_err" in x]
+        if skull_evals:
+            ks, nk = fitted_k(self.samples, "skull")
+            fe = [x["face_err"] for x in skull_evals]
+            unit = skull_evals[0]["face_unit"]
+            lines.append(f"<b>All {nk} skull marks</b>: face-size mean |error| {np.mean(np.abs(fe)):.2f} {unit}, "
+                         f"max {np.max(np.abs(fe)):.2f} {unit}; fitted k (skull) <b>{ks:.2f}</b>")
+        return "<br>".join(lines)
+
+    def closeEvent(self, event):
+        self.processor.close()
+        super().closeEvent(event)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("photos", nargs="*", help="still photos (JPG/PNG)")
+    parser.add_argument("--demo", action="store_true", help="add synthetic faces (no camera or model needed)")
+    parser.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)  # save a screenshot and quit
+    args = parser.parse_args()
+    samples = [Sample(Path(p).name, path=p) for p in args.photos]
+    if args.demo or not samples:
+        samples += [Sample(f"demo {i + 1}", scene=sc) for i, sc in enumerate(DEMO_SCENES)]
+    app = QApplication(sys.argv[:1])
+    font = QFont(app.font())
+    font.setPointSizeF(max(font.pointSizeF(), 12))
+    app.setFont(font)
+    win = Inspector(samples)
+    win.show()
+    if args.snapshot:
+        def snap():
+            win.grab().save(args.snapshot)
+            win.close()
+        QTimer.singleShot(4000, snap)
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

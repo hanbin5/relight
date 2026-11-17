@@ -1,8 +1,10 @@
 """Module C: head geometry, crop and scale, print sheet and 300 DPI output (plan B.5, A.1).
 
-Landmark 10 sits on the upper forehead, not the top of the head, so the crown is estimated
-from two cues: the proportion rule crown = chin - k (chin - eye line) with k = 2, and the top
-of the foreground mask on the face midline (used when it agrees with the proportion).
+Landmark 10 sits on the upper forehead, not the top of the head, so the crown (the top of
+the hair) is measured where the foreground mask ends on the face midline. The proportion rule
+crown = chin - k (chin - eye line), k = 2, checks that measurement: the mask top is used only
+if it lies within config.CROWN_MASK_AGREE of the proportion's head length, and otherwise the
+proportion rule stands in for it (mask cut off the hair, ran into the wall, or left the frame).
 The crop keeps the head at its default share of the photo height:
     H_crop = H_head / f_head,  W_crop = H_crop * W_doc / H_doc
 and is resampled with separable bicubic interpolation; scaling is always uniform.
@@ -28,13 +30,27 @@ class PhotoFormat:
     head_share: float  # default head length as a share of the photo height (A.1)
     top_margin: float  # crown distance from the top edge, as a share of the photo height
     sheet_grid: tuple | None  # (columns, rows) on the 6 x 4 in landscape print sheet
+    face_share: float  # face mode: chin to skull top as a share of the photo height
+    skull_top: float  # face mode: skull top distance from the top edge, as a share of the height
 
 
+# Head mode (the default): head_share is the plan's default (A.1). Résumé and ID formats have
+# no official head size, so the head is 75% of the height (30 mm on the 40 mm résumé photo) and
+# 50% on the profile photo. top_margin (10%, 15%) is our choice: room above the hair without a
+# gap, which leaves the chin at 85% (65% on the profile). Both are to be tuned in the user test.
+# Face mode (experimental, see config.CROP_MODE): a typical head of hair adds about 5% to
+# chin-to-skull, so face_share and skull_top put typical hair where head mode puts it and keep
+# the chin at the same height.
 FORMATS = {
-    "resume": PhotoFormat("resume", (30, 40), (354, 472), 0.75, 0.10, (5, 2)),
-    "id": PhotoFormat("id", (35, 45), (413, 531), 0.75, 0.10, (4, 2)),
-    "profile": PhotoFormat("profile", None, (800, 800), 0.50, 0.15, None),
+    "resume": PhotoFormat("resume", (30, 40), (354, 472), 0.75, 0.10, (5, 2), 0.71, 0.14),
+    "id": PhotoFormat("id", (35, 45), (413, 531), 0.75, 0.10, (4, 2), 0.71, 0.14),
+    "profile": PhotoFormat("profile", None, (800, 800), 0.50, 0.15, None, 0.47, 0.18),
 }
+
+
+def default_share(fmt: PhotoFormat, mode: str | None = None) -> float:
+    """The format's default size share in the given crop mode (config.CROP_MODE if None)."""
+    return fmt.face_share if (mode or config.CROP_MODE) == "face" else fmt.head_share
 
 NOTICE = ("Edited photo (relit, background replaced). Not for passports or other government "
           "IDs: they require unedited photos.")
@@ -62,16 +78,22 @@ def head_pose(lm: np.ndarray) -> dict:
     return {"roll_deg": roll, "yaw_ratio": yaw_ratio, "pitch_ratio": pitch_ratio}
 
 
-def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
-    """Crown point (x, y) and which cues were used."""
+def crown_cues(lm: np.ndarray, alpha: np.ndarray | None = None) -> dict:
+    """Both crown cues before they are combined.
+
+    proportion: chin + k (eye line - chin). mask: where the foreground mask ends on the
+    midline above the forehead mark, or None if it never ends inside the frame. agree:
+    the mask cue's distance from the chin over the proportion cue's (1.0 = same point).
+    up and ec are the unit chin-to-eye direction and the chin-to-eye distance.
+    """
     eye = 0.5 * (lm[mesh.IRIS_R, :2] + lm[mesh.IRIS_L, :2])
     chin = lm[mesh.CHIN, :2]
     up = eye - chin
     ec = float(np.linalg.norm(up))
     up = up / max(ec, 1e-6)
-    crown_prop = chin + config.CROWN_K * ec * up
+    cues = {"proportion": chin + config.CROWN_K * ec * up, "mask": None, "agree": None, "up": up, "ec": ec}
     if alpha is None:
-        return crown_prop, "proportion"
+        return cues
     # Scan up the midline from the forehead mark until the mask ends.
     start = lm[mesh.FOREHEAD, :2]
     steps = np.arange(0.0, 1.2 * ec, 0.5)
@@ -81,22 +103,38 @@ def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
     below = a < 0.5
     run = np.convolve(below.astype(np.int32), np.ones(3, np.int32), "valid") == 3
     if not run.any() or not inside[np.argmax(run)]:
-        return crown_prop, "proportion"  # mask runs off the frame or never ends
-    crown_mask = pts[np.argmax(run)]
-    agree = float((crown_mask - chin) @ up) / (config.CROWN_K * ec)
+        return cues  # mask runs off the frame or never ends
+    cues["mask"] = pts[np.argmax(run)]
+    cues["agree"] = float((cues["mask"] - chin) @ up) / (config.CROWN_K * ec)
+    return cues
+
+
+def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
+    """Crown point (x, y) and which cues were used."""
+    return _combine(crown_cues(lm, alpha))
+
+
+def _combine(cues: dict):
+    """Measured mask top if it passes the proportion check, else the proportion rule."""
     lo, hi = config.CROWN_MASK_AGREE
-    if lo <= agree <= hi:
-        return 0.5 * (crown_prop + crown_mask), "mask+proportion"
-    return crown_prop, "proportion"
+    if cues["mask"] is not None and lo <= cues["agree"] <= hi:
+        return cues["mask"], "mask"
+    return cues["proportion"], "proportion"
 
 
 def measure(lm: np.ndarray, alpha: np.ndarray | None = None) -> dict:
-    """Crown, chin, eye center, head length, midline and pose angles."""
-    crown, source = estimate_crown(lm, alpha)
+    """Crown (hair top), skull top, chin, eye center, head length, midline and pose angles.
+
+    The skull top is the proportion cue alone: the eyes-halfway rule describes the skull, not
+    the hair. Face-mode crops are sized from it.
+    """
+    cues = crown_cues(lm, alpha)
+    crown, source = _combine(cues)
     chin = lm[mesh.CHIN, :2]
     eye = 0.5 * (lm[mesh.IRIS_R, :2] + lm[mesh.IRIS_L, :2])
     geo = {
         "crown": crown.astype(np.float32),
+        "skull": cues["proportion"].astype(np.float32),
         "chin": chin.astype(np.float32),
         "eye_center": eye.astype(np.float32),
         "head_length": float(np.linalg.norm(chin - crown)),
@@ -107,15 +145,51 @@ def measure(lm: np.ndarray, alpha: np.ndarray | None = None) -> dict:
     return geo
 
 
-def crop_box(geo: dict, fmt: PhotoFormat, head_share: float | None = None):
-    """(x0, y0, x1, y1) of the crop in frame pixels; may extend past the frame."""
-    share = float(head_share or fmt.head_share)
+def crop_box(geo: dict, fmt: PhotoFormat, share: float | None = None, mode: str | None = None):
+    """(x0, y0, x1, y1) of the crop in frame pixels; may extend past the frame.
+
+    share is the head share in head mode and the face share in face mode (config.CROP_MODE
+    when mode is None); None takes the format's default.
+    """
+    if (mode or config.CROP_MODE) == "face":
+        return face_crop(geo, fmt, share)["box"]
+    share = float(share or fmt.head_share)
     h_crop = geo["head_length"] / share
     w_crop = h_crop * fmt.size_px[0] / fmt.size_px[1]
     top_margin = min(fmt.top_margin, 0.5 * (1.0 - share))
     y0 = float(geo["crown"][1]) - top_margin * h_crop
     x0 = geo["center_x"] - 0.5 * w_crop
     return (x0, y0, x0 + w_crop, y0 + h_crop)
+
+
+def face_crop(geo: dict, fmt: PhotoFormat, face_share: float | None = None) -> dict:
+    """Face-mode crop (experimental): sized by chin to skull top, then kept clear of the hair.
+
+    The skull top goes at fmt.skull_top (lower if the chin would otherwise sit below
+    CHIN_MAX). If the hair top would come closer to the top edge
+    than HAIR_MARGIN_MIN, the crop moves up ("moved"); if that pushes the chin below
+    CHIN_MAX, it zooms out until both fit ("zoomed"). Returns the box, what was done, and the
+    face and hair positions as shares of the photo height.
+    """
+    share = float(face_share or fmt.face_share)
+    skull_y, chin_y = float(geo["skull"][1]), float(geo["chin"][1])
+    hair_y = min(float(geo["crown"][1]), skull_y)
+    h = float(np.linalg.norm(geo["chin"] - geo["skull"])) / share
+    m, c = config.HAIR_MARGIN_MIN, config.CHIN_MAX
+    # The skull top goes at skull_top, unless a large face share would push the chin below
+    # CHIN_MAX (0.14 + 0.90 = 104% would cut it off); then the chin sets the position.
+    y0 = max(skull_y - fmt.skull_top * h, chin_y - c * h)
+    action = "fits"
+    if hair_y - y0 < m * h:
+        y0, action = hair_y - m * h, "moved"
+        if chin_y - y0 > c * h:
+            h = (chin_y - hair_y) / (c - m)
+            y0, action = hair_y - m * h, "zoomed"
+    w = h * fmt.size_px[0] / fmt.size_px[1]
+    x0 = geo["center_x"] - 0.5 * w
+    return {"box": (x0, y0, x0 + w, y0 + h), "action": action,
+            "face_share": float(np.linalg.norm(geo["chin"] - geo["skull"])) / h,
+            "hair_top": (hair_y - y0) / h, "chin": (chin_y - y0) / h}
 
 
 def crop_fits(box, size, tolerance: float = 0.02) -> bool:
@@ -137,7 +211,7 @@ class GeometryTracker:
         self.state = None
 
     def update(self, geo: dict) -> dict:
-        keys = ("crown", "chin", "eye_center", "head_length", "center_x")
+        keys = ("crown", "skull", "chin", "eye_center", "head_length", "center_x")
         if self.state is None:
             self.state = {k: geo[k] for k in keys}
         else:

@@ -32,7 +32,8 @@ class Settings:
     """User choices from the GUI; read by the pipeline every frame."""
 
     format: str = "resume"
-    head_share: dict = field(default_factory=lambda: {k: f.head_share for k, f in geometry.FORMATS.items()})
+    # head share in head mode, face share in face mode (config.CROP_MODE)
+    head_share: dict = field(default_factory=lambda: {k: geometry.default_share(f) for k, f in geometry.FORMATS.items()})
     background: str = "white"
     strength: float = config.DEFAULT_STRENGTH
     auto_shutter: bool = True
@@ -133,7 +134,9 @@ class Pipeline:
                          "detail": {k: _num(x) for k, x in v.detail.items()}}
                 for v in (live.rule_verdicts or {}).values()
             },
-            "geometry": {"crown": [float(x) for x in geo["crown"]], "chin": [float(x) for x in geo["chin"]],
+            "geometry": {"crop_mode": config.CROP_MODE,
+                         "crown": [float(x) for x in geo["crown"]], "skull": [float(x) for x in geo["skull"]],
+                         "chin": [float(x) for x in geo["chin"]],
                          "head_length_px": geo["head_length"], "crown_source": geo["crown_source"],
                          "roll_deg": geo["roll_deg"], "yaw_ratio": geo["yaw_ratio"], "pitch_ratio": geo["pitch_ratio"],
                          "crop_boxes": {k: [float(x) for x in b] for k, b in boxes.items()},
