@@ -1,9 +1,10 @@
 """Module C: head geometry, crop and scale, print sheet and 300 DPI output (plan B.5, A.1).
 
-Landmark 10 sits on the upper forehead, not the top of the head, so the crown is estimated
-from two cues: the proportion rule crown = chin - k (chin - eye line) with k = 2, and the top
-of the foreground mask on the face midline. When the two agree, the crown is their weighted
-mean (config.CROWN_MASK_WEIGHT is the mask cue's share).
+Landmark 10 sits on the upper forehead, not the top of the head, so the crown (the top of
+the hair) is measured where the foreground mask ends on the face midline. The proportion rule
+crown = chin - k (chin - eye line), k = 2, checks that measurement: the mask top is used only
+if it lies within config.CROWN_MASK_AGREE of the proportion's head length, and otherwise the
+proportion rule stands in for it (mask cut off the hair, ran into the wall, or left the frame).
 The crop keeps the head at its default share of the photo height:
     H_crop = H_head / f_head,  W_crop = H_crop * W_doc / H_doc
 and is resampled with separable bicubic interpolation; scaling is always uniform.
@@ -33,8 +34,13 @@ class PhotoFormat:
     skull_top: float  # face mode: skull top distance from the top edge, as a share of the height
 
 
-# Face-mode defaults: a typical head of hair adds about 5% to chin-to-skull, so these put
-# typical hair where head mode puts it (top margin and head share) and keep the chin in place.
+# Head mode (the default): head_share is the plan's default (A.1). Résumé and ID formats have
+# no official head size, so the head is 75% of the height (30 mm on the 40 mm résumé photo) and
+# 50% on the profile photo. top_margin (10%, 15%) is our choice: room above the hair without a
+# gap, which leaves the chin at 85% (65% on the profile). Both are to be tuned in the user test.
+# Face mode (experimental, see config.CROP_MODE): a typical head of hair adds about 5% to
+# chin-to-skull, so face_share and skull_top put typical hair where head mode puts it and keep
+# the chin at the same height.
 FORMATS = {
     "resume": PhotoFormat("resume", (30, 40), (354, 472), 0.75, 0.10, (5, 2), 0.71, 0.14),
     "id": PhotoFormat("id", (35, 45), (413, 531), 0.75, 0.10, (4, 2), 0.71, 0.14),
@@ -109,10 +115,10 @@ def estimate_crown(lm: np.ndarray, alpha: np.ndarray | None = None):
 
 
 def _combine(cues: dict):
+    """Measured mask top if it passes the proportion check, else the proportion rule."""
     lo, hi = config.CROWN_MASK_AGREE
     if cues["mask"] is not None and lo <= cues["agree"] <= hi:
-        w = config.CROWN_MASK_WEIGHT
-        return (1.0 - w) * cues["proportion"] + w * cues["mask"], "mask+proportion"
+        return cues["mask"], "mask"
     return cues["proportion"], "proportion"
 
 
@@ -157,7 +163,7 @@ def crop_box(geo: dict, fmt: PhotoFormat, share: float | None = None, mode: str 
 
 
 def face_crop(geo: dict, fmt: PhotoFormat, face_share: float | None = None) -> dict:
-    """Face-mode crop: sized by chin to skull top, then kept clear of the hair.
+    """Face-mode crop (experimental): sized by chin to skull top, then kept clear of the hair.
 
     The skull top goes at fmt.skull_top. If the hair top would come closer to the top edge
     than HAIR_MARGIN_MIN, the crop moves up ("moved"); if that pushes the chin below

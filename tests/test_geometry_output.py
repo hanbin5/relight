@@ -31,19 +31,20 @@ def test_crown_follows_the_proportion_rule():
 
 
 
-def test_mask_weight_moves_the_crown_between_the_two_cues(monkeypatch):
+def test_crown_is_the_mask_top_when_the_proportion_agrees(monkeypatch):
     rgb, lm, person = synthetic.render(synthetic.Scene(**SIDE))
     alpha = person.astype(np.float32)
     cues = geometry.crown_cues(lm, alpha)
     assert cues["mask"] is not None
     monkeypatch.setattr(config, "CROWN_MASK_AGREE", (0.0, 10.0))
-    for w, expected in ((0.0, cues["proportion"]), (1.0, cues["mask"]),
-                        (0.25, 0.75 * cues["proportion"] + 0.25 * cues["mask"])):
-        monkeypatch.setattr(config, "CROWN_MASK_WEIGHT", w)
-        crown, source = geometry.estimate_crown(lm, alpha)
-        assert source == "mask+proportion"
-        np.testing.assert_allclose(crown, expected, atol=1e-4)
-
+    crown, source = geometry.estimate_crown(lm, alpha)
+    assert source == "mask"
+    np.testing.assert_allclose(crown, cues["mask"])
+    # A mask top far outside the band is not trusted: the proportion rule stands in.
+    monkeypatch.setattr(config, "CROWN_MASK_AGREE", (cues["agree"] + 0.5, cues["agree"] + 1.0))
+    crown, source = geometry.estimate_crown(lm, alpha)
+    assert source == "proportion"
+    np.testing.assert_allclose(crown, cues["proportion"])
 
 
 @pytest.mark.parametrize("key", list(geometry.FORMATS))

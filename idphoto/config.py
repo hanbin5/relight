@@ -68,15 +68,24 @@ CONTRAST_MIN = 0.12  # rule 7: person-wall contrast at the shoulder line
 SHUTTER_FRAMES = 5  # auto shutter: all rules pass for 5 frames in a row
 
 # B.5 Crop geometry -----------------------------------------------------------------------
-CROWN_K = 2.0  # crown ~ chin - k (chin - eye line)
-CROWN_MASK_AGREE = (0.85, 1.25)  # mask-top cue is used only if it agrees with the proportion
-CROWN_MASK_WEIGHT = 0.5  # share of the mask-top cue when it is used (0 = proportion only, 1 = mask only)
-# Crop mode. "head": the head with its hair fills head_share of the photo (plan B.5).
-# "face": chin to skull top (the proportion rule, hair left out) fills face_share, so faces come
-# out the same size whatever the hairstyle; the hair top (the crown above) only moves the crop up
-# or zooms out so the hair is not cut. Per-format shares are in geometry.FORMATS.
-CROP_MODE = "head"
-HAIR_MARGIN_MIN = 0.04  # face mode: least room above the hair, as a share of the photo height
-CHIN_MAX = 0.92  # face mode: lowest the chin may sit, as a share of the photo height
+# Crown (top of the hair). Measured: where the person mask ends on the face midline.
+# Checked: by the eyes-halfway proportion, crown = chin - k (chin - eye line).
+CROWN_K = 2.0  # the eyes sit about halfway between chin and the top of the skull (classic face
+# proportion, plan B.5). Hair adds to it: on hand-marked photos the hair top fitted k = 1.99-2.25
+# depending on the hairstyle, so k alone cannot place the hair top; it only checks the mask.
+CROWN_MASK_AGREE = (0.85, 1.25)  # the measured mask top is trusted only within 0.85-1.25 x the
+# proportion's chin-to-crown length: lower means the mask cut into the hair, higher that it ran
+# into the wall or a hat; outside the band the proportion rule is used instead. The band is
+# wide enough for the hairstyles above (hair top at 0.99-1.13 x the proportion).
+
+# EXPERIMENTAL, not the default and not validated: CROP_MODE = "face" sizes the photo by chin
+# to skull top (the proportion rule without hair), so faces come out the same size whatever the
+# hairstyle, and uses the hair top only to keep the hair inside the photo. The skull proportion
+# itself varied by 5-8% between the two people measured so far, so this waits for more data.
+# Per-format shares are in geometry.FORMATS.
+CROP_MODE = "head"  # "head" (plan B.5): the head with its hair fills head_share of the photo
+HAIR_MARGIN_MIN = 0.04  # face mode: least room above the hair, 4% of the height (1.6 mm on a
+# 40 mm photo), so hair never touches the edge
+CHIN_MAX = 0.92  # face mode: the chin sits no lower than 92%, leaving at least 3 mm of neck
 PRINT_DPI = 300
 SHEET_PX = (1800, 1200)  # 6 x 4 in landscape at 300 DPI (w, h)

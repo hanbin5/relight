@@ -5,16 +5,16 @@
 
 Left: the processed frame (not mirrored) with both crown cues, the final crown, the chin,
 the eye line and the crop box. Right: sliders for k, the band in which the mask cue is
-accepted, its weight, and the head and face shares, and the 300 DPI photo each crop mode would
-save: head mode sizes the head with its hair (the default), face mode sizes chin to skull top
-and only keeps the crop clear of the hair (config.CROP_MODE).
+accepted, and the head and face shares, and the 300 DPI photo each crop mode would save: head
+mode sizes the head with its hair (the default), the experimental face mode sizes chin to skull
+top and only keeps the crop clear of the hair (config.CROP_MODE).
 
 Click the photo to mark the true crown (the highest point of the hair outline, flyaway
 strands left out); right-click clears it. Shift+click marks the true skull top where it can
 be seen (hair flattened under a cap or band, or very short hair); Shift+right-click clears it.
 A very short-haired photo can carry both marks. Marks are kept in out/crown_marks.json.
-Crown marks give the head-length error in mm (target: within +-1 mm, plan C.1), the mask
-weight that fits best and, in face mode, whether the hair would be cut. Skull marks give the
+Crown marks give the head-length error in mm (target: within +-1 mm, plan C.1) and, in face
+mode, whether the hair would be cut. Skull marks give the
 face-size error of face mode and the k that fits the skull, which is what "Use fitted k"
 uses when there are any. Demo faces are marked automatically from the renderer's person mask.
 Left and right arrow keys switch photos.
@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKS = ROOT / "out" / "crown_marks.json"
-DEFAULT_K, DEFAULT_AGREE, DEFAULT_WEIGHT = config.CROWN_K, config.CROWN_MASK_AGREE, config.CROWN_MASK_WEIGHT
+DEFAULT_K, DEFAULT_AGREE = config.CROWN_K, config.CROWN_MASK_AGREE
 
 C_PROP, C_MASK, C_CROWN, C_CHIN, C_EYE = "#f39c12", "#8e44ad", "#e74c3c", "#27ae60", "#2f6fdf"
 C_TRUTH, C_BOX, C_BOX_OUT, C_FACE, C_SKULL_TRUTH = "#e91e8c", "#2f6fdf", "#e0712c", "#16a085", "#00bcd4"
@@ -165,25 +165,6 @@ def fitted_k(samples, kind: str = "crown") -> tuple:
         d = float((mark - s.ctx.landmarks[mesh.CHIN, :2]) @ cues["up"])
         num, den, n = num + cues["ec"] * d, den + cues["ec"] ** 2, n + 1
     return (num / den if den else None), n
-
-
-def fitted_weight(samples) -> tuple:
-    """Least-squares mask weight over the marked samples whose mask cue is used at the current
-    k and band. The crown is prop + w (mask - prop) along the midline, so with a = mask - prop
-    and b = truth - prop (heights along it), w = sum(a b) / sum(a^2)."""
-    num = den = 0.0
-    n = 0
-    lo, hi = config.CROWN_MASK_AGREE
-    for s in samples:
-        if s.truth is None or s.ctx is None or s.ctx.landmarks is None:
-            continue
-        cues = geometry.crown_cues(s.ctx.landmarks, s.ctx.alpha)
-        if cues["mask"] is None or not lo <= cues["agree"] <= hi:
-            continue
-        a = float((cues["mask"] - cues["proportion"]) @ cues["up"])
-        b = float((s.truth - cues["proportion"]) @ cues["up"])
-        num, den, n = num + a * b, den + a * a, n + 1
-    return (num / den if den > 1e-6 else None), n
 
 
 # ---------------------------------------------------------------------------------------
@@ -392,7 +373,7 @@ class Inspector(QMainWindow):
         self.sliders = {}
         rows = [("k", "k", 150, 260, DEFAULT_K * 100), ("lo", "mask band low", 50, 100, DEFAULT_AGREE[0] * 100),
                 ("hi", "mask band high", 100, 170, DEFAULT_AGREE[1] * 100),
-                ("w", "mask weight", 0, 100, DEFAULT_WEIGHT * 100), ("share", "head share", 40, 90, 75),
+                ("share", "head share", 40, 90, 75),
                 ("face", "face share", 40, 90, geometry.FORMATS["resume"].face_share * 100)]
         for r, (key, text, lo, hi, val) in enumerate(rows, start=2):
             s = QSlider(Qt.Orientation.Horizontal)
@@ -419,7 +400,7 @@ class Inspector(QMainWindow):
 
         previews = QHBoxLayout()
         self.previews = {}
-        for mode, text in (("head", "Head mode: head with hair"), ("face", "Face mode: chin to skull")):
+        for mode, text in (("head", "Head mode: head with hair"), ("face", "Face mode (experimental): chin to skull")):
             col = QVBoxLayout()
             cap = QLabel()
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -438,17 +419,10 @@ class Inspector(QMainWindow):
         use_fit = QPushButton("Use fitted k")
         use_fit.setToolTip("k that fits the marked photos best, from the proportion cue alone")
         use_fit.clicked.connect(self.use_fitted_k)
-        use_w = QPushButton("Use fitted weight")
-        use_w.setToolTip("Mask weight that fits the marked photos best, at the current k and band")
-        use_w.clicked.connect(self.use_fitted_weight)
         copy = QPushButton("Copy config")
-        copy.setToolTip("Copy the CROWN_ lines for idphoto/config.py")
+        copy.setToolTip("Copy the CROWN_K and CROWN_MASK_AGREE values for idphoto/config.py")
         copy.clicked.connect(self.copy_config)
-        for b in (use_fit, use_w):
-            buttons.addWidget(b)
-        v.addLayout(buttons)
-        buttons = QHBoxLayout()
-        for b in (reset, copy):
+        for b in (reset, use_fit, copy):
             buttons.addWidget(b)
         v.addLayout(buttons)
         self.status = QLabel()  # what the last button did, so no click goes unanswered
@@ -537,11 +511,10 @@ class Inspector(QMainWindow):
         self.refresh()
 
     def reset(self):
-        for key, val in (("k", DEFAULT_K), ("lo", DEFAULT_AGREE[0]), ("hi", DEFAULT_AGREE[1]), ("w", DEFAULT_WEIGHT)):
+        for key, val in (("k", DEFAULT_K), ("lo", DEFAULT_AGREE[0]), ("hi", DEFAULT_AGREE[1])):
             self.sliders[key][0].setValue(int(round(val * 100)))
         self.format_changed(self.fmt.currentText())  # also resets the head and face shares
-        self.say(f"Back to config.py: k {DEFAULT_K:.2f}, mask band {DEFAULT_AGREE[0]:.2f}–{DEFAULT_AGREE[1]:.2f}, "
-                 f"mask weight {DEFAULT_WEIGHT:.2f}.")
+        self.say(f"Back to config.py: k {DEFAULT_K:.2f}, mask band {DEFAULT_AGREE[0]:.2f}–{DEFAULT_AGREE[1]:.2f}.")
 
     def use_fitted_k(self):
         # k is the eyes-halfway rule for the skull, so skull marks win when there are any.
@@ -560,24 +533,12 @@ class Inspector(QMainWindow):
         else:
             self.say(f"k set to {k:.2f}, fitted to the {basis} marks of {n} photo(s).")
 
-    def use_fitted_weight(self):
-        w, n = fitted_weight(self.samples)
-        if w is None:
-            self.say("No marked photo uses the mask cue at these settings: mark more photos or widen the mask band.")
-            return
-        self.sliders["w"][0].setValue(int(round(min(max(w, 0.0), 1.0) * 100)))
-        note = "" if 0.0 <= w <= 1.0 else f" (best fit {w:.2f} is outside 0–1, so it was clipped)"
-        self.say(f"Mask weight set to {self.value('w'):.2f}, fitted to {n} marked photo(s) that use the mask cue{note}.")
-
     def copy_config(self):
-        text = (f"CROWN_K = {self.value('k'):.2f}  # crown ~ chin - k (chin - eye line)\n"
-                f"CROWN_MASK_AGREE = ({self.value('lo'):.2f}, {self.value('hi'):.2f})"
-                "  # mask-top cue is used only if it agrees with the proportion\n"
-                f"CROWN_MASK_WEIGHT = {self.value('w'):.2f}"
-                "  # share of the mask-top cue when it is used (0 = proportion only, 1 = mask only)\n")
+        text = (f"CROWN_K = {self.value('k'):.2f}\n"
+                f"CROWN_MASK_AGREE = ({self.value('lo'):.2f}, {self.value('hi'):.2f})\n")
         QApplication.clipboard().setText(text)
         print(text, end="")
-        self.say("Copied to the clipboard (also printed in the terminal). Paste it over the CROWN_ lines (71–73) of idphoto/config.py.")
+        self.say("Copied to the clipboard (also printed in the terminal). In idphoto/config.py, replace the values on the CROWN_K and CROWN_MASK_AGREE lines (keep the comments).")
 
     # -- display -------------------------------------------------------------------------
     def show_sample(self, i: int):
@@ -602,8 +563,6 @@ class Inspector(QMainWindow):
     def refresh(self, *_):
         config.CROWN_K = self.value("k")
         config.CROWN_MASK_AGREE = (self.value("lo"), self.value("hi"))
-        config.CROWN_MASK_WEIGHT = self.value("w")
-        self.sliders["w"][1].setText(f"{self.value('w'):.2f}")
         self.sliders["k"][1].setText(f"{self.value('k'):.2f}")
         self.sliders["lo"][1].setText(f"{self.value('lo'):.2f}")
         self.sliders["hi"][1].setText(f"{self.value('hi'):.2f}")
@@ -697,9 +656,6 @@ class Inspector(QMainWindow):
             cut = sum(t < 0 for t in tops)
             lines.append(f"Face mode, all marked: true hair top {100 * min(tops):.1f}–{100 * max(tops):.1f}% from the top"
                          + (f", <span style='color:#c0392b'><b>{cut} cut off</b></span>" if cut else ", none cut off"))
-            w, nw = fitted_weight(self.samples)
-            if w is not None:
-                lines.append(f"Fitted mask weight <b>{w:.2f}</b> from the {nw} marked photo(s) that use the mask cue")
         skull_evals = [x for s in self.samples if s.skull is not None
                        for x in [evaluate(s, fmt_key, share, use_mask, self.value("face"))] if x is not None and "face_err" in x]
         if skull_evals:
