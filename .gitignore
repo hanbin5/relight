@@ -7,3 +7,5 @@ out/
 models/
 # PyCharm project settings (per user)
 .idea/
+# macOS folder settings
+.DS_Store
