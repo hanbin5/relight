@@ -559,18 +559,22 @@ class Inspector(QMainWindow):
         mask is computed with config.py's k (the matting uses k for its head prior): the k
         slider changes only the crown check, never the masks.
         """
-        config.CROWN_K = DEFAULT_K
+        # The controls stay off while photos are processed, so no slider, button or click can
+        # act on a half-loaded set; k is reset before every photo all the same.
+        self.centralWidget().setEnabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             for n, sample in enumerate(self.samples, start=1):
                 self.name.setText(f"Processing {n}/{len(self.samples)}: {sample.name}…")
                 QApplication.processEvents()
                 try:
+                    config.CROWN_K = DEFAULT_K
                     self.processor.run(sample)
                 except Exception as exc:  # keep the window; show it on that photo
                     sample.ctx, sample.error = None, str(exc)
         finally:
             QApplication.restoreOverrideCursor()
+            self.centralWidget().setEnabled(True)
         failed = sum(s.error is not None for s in self.samples)
         if failed:
             self.say(f"{failed} photo(s) could not be processed; they show the reason and cannot be marked.")
