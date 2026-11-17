@@ -18,6 +18,11 @@ mode, whether the hair would be cut. Skull marks give the
 face-size error of face mode and the k that fits the skull, which is what "Use fitted k"
 uses when there are any. Demo faces are marked automatically from the renderer's person mask.
 Left and right arrow keys switch photos.
+
+Measurements use the live frame (640 px wide), as the app's on-screen guide does. A saved
+photo is re-rendered at full resolution; on our test photos its crown error differed from the
+inspector's by at most 0.4 mm (0.1 mm on most). The previews always show a white background,
+even where the app would keep the original wall because rule 7 failed.
 """
 
 import argparse
@@ -62,6 +67,7 @@ class Sample:
     def __init__(self, name: str, path: str | None = None, scene: dict | None = None):
         self.name, self.path, self.scene = name, path, scene
         self.ctx = None
+        self.error = None  # why the photo could not be processed
         self.truth = None  # (x, y) of the true crown (hair top) in live-frame pixels
         self.skull = None  # (x, y) of the true skull top, where it can be seen (hair flattened or very short)
         self.auto_truth = False
@@ -72,7 +78,12 @@ class Sample:
 
 
 class Processor:
-    """Runs the pipeline once per sample (5 identical frames, like tools/process_image.py)."""
+    """Runs the pipeline once per sample (5 identical frames, like tools/process_image.py).
+
+    Landmarks are found in MediaPipe's IMAGE mode, so each photo is detected on its own. In
+    VIDEO mode the tracker carries over from the photo before, and the same photo's landmarks
+    (and crown error) changed with the order the photos were opened in.
+    """
 
     def __init__(self):
         self.detector = None
@@ -80,8 +91,8 @@ class Processor:
 
     def run(self, sample: Sample):
         if sample.scene is not None:
-            scene = synthetic.Scene(width=960, height=540, ambient=0.25, light=(-0.55, 0.2, 0.8),
-                                    **{k: v for k, v in sample.scene.items()})
+            defaults = dict(width=960, height=540, ambient=0.25, light=(-0.55, 0.2, 0.8))
+            scene = synthetic.Scene(**{**defaults, **sample.scene})
             rgb, lm, person = synthetic.render(scene)
             live, lm_live = to_live(rgb, lm)
             col = int(round(0.5 * (lm[mesh.IRIS_R, 0] + lm[mesh.IRIS_L, 0])))
@@ -98,7 +109,7 @@ class Processor:
             if self.detector is None:
                 from idphoto.landmarks import FaceLandmarkDetector
 
-                self.detector = FaceLandmarkDetector()
+                self.detector = FaceLandmarkDetector(video=False)
             pipe = Pipeline(self.detector)
         for _ in range(5):
             self.timestamp += 33
@@ -447,7 +458,7 @@ class Inspector(QMainWindow):
         self.resize(1320, 820)
         QShortcut(QKeySequence(Qt.Key.Key_Left), self, lambda: self.show_sample(self.index - 1))
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, lambda: self.show_sample(self.index + 1))
-        QTimer.singleShot(0, lambda: self.show_sample(0))
+        QTimer.singleShot(0, self.process_all)
 
     # -- marks ---------------------------------------------------------------------------
     def _load_marks(self):
@@ -541,22 +552,44 @@ class Inspector(QMainWindow):
         self.say("Copied to the clipboard (also printed in the terminal). In idphoto/config.py, replace the values on the CROWN_K and CROWN_MASK_AGREE lines (keep the comments).")
 
     # -- display -------------------------------------------------------------------------
+    def process_all(self):
+        """Process every photo once, before any slider moves.
+
+        The fits and totals then cover every marked photo, not only the ones visited, and every
+        mask is computed with config.py's k (the matting uses k for its head prior): the k
+        slider changes only the crown check, never the masks.
+        """
+        config.CROWN_K = DEFAULT_K
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for n, sample in enumerate(self.samples, start=1):
+                self.name.setText(f"Processing {n}/{len(self.samples)}: {sample.name}…")
+                QApplication.processEvents()
+                try:
+                    self.processor.run(sample)
+                except Exception as exc:  # keep the window; show it on that photo
+                    sample.ctx, sample.error = None, str(exc)
+        finally:
+            QApplication.restoreOverrideCursor()
+        failed = sum(s.error is not None for s in self.samples)
+        if failed:
+            self.say(f"{failed} photo(s) could not be processed; they show the reason and cannot be marked.")
+        self.show_sample(0)
+
     def show_sample(self, i: int):
         if len(self.samples) == 1 and i != 0:
             self.say("Only one photo is open. Pass several, e.g. out/photos/*.jpg")
         self.index = i % len(self.samples)
         sample = self.samples[self.index]
-        if sample.ctx is None:
-            self.name.setText(f"Processing {sample.name}…")
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            QApplication.processEvents()
-            try:
-                self.processor.run(sample)
-            except Exception as exc:  # show the error, keep the window
-                self.name.setText(f"{sample.name}: {exc}")
-                return
-            finally:
-                QApplication.restoreOverrideCursor()
+        if sample.ctx is None:  # unreadable or failed: clear the view so no stale photo can be marked
+            self.name.setText(f"<b>{self.index + 1}/{len(self.samples)}</b> {sample.name}: "
+                              f"{sample.error or 'not processed'}")
+            self.view.image, self.view.result = None, None
+            self.view.update()
+            self.readout.clear()
+            for _, prev, _ in self.previews.values():
+                prev.set_pixmap(None)
+            return
         self.name.setText(f"<b>{self.index + 1}/{len(self.samples)}</b> {sample.name}")
         self.refresh()
 

@@ -165,7 +165,8 @@ def crop_box(geo: dict, fmt: PhotoFormat, share: float | None = None, mode: str 
 def face_crop(geo: dict, fmt: PhotoFormat, face_share: float | None = None) -> dict:
     """Face-mode crop (experimental): sized by chin to skull top, then kept clear of the hair.
 
-    The skull top goes at fmt.skull_top. If the hair top would come closer to the top edge
+    The skull top goes at fmt.skull_top (lower if the chin would otherwise sit below
+    CHIN_MAX). If the hair top would come closer to the top edge
     than HAIR_MARGIN_MIN, the crop moves up ("moved"); if that pushes the chin below
     CHIN_MAX, it zooms out until both fit ("zoomed"). Returns the box, what was done, and the
     face and hair positions as shares of the photo height.
@@ -174,9 +175,11 @@ def face_crop(geo: dict, fmt: PhotoFormat, face_share: float | None = None) -> d
     skull_y, chin_y = float(geo["skull"][1]), float(geo["chin"][1])
     hair_y = min(float(geo["crown"][1]), skull_y)
     h = float(np.linalg.norm(geo["chin"] - geo["skull"])) / share
-    y0 = skull_y - fmt.skull_top * h
-    action = "fits"
     m, c = config.HAIR_MARGIN_MIN, config.CHIN_MAX
+    # The skull top goes at skull_top, unless a large face share would push the chin below
+    # CHIN_MAX (0.14 + 0.90 = 104% would cut it off); then the chin sets the position.
+    y0 = max(skull_y - fmt.skull_top * h, chin_y - c * h)
+    action = "fits"
     if hair_y - y0 < m * h:
         y0, action = hair_y - m * h, "moved"
         if chin_y - y0 > c * h:

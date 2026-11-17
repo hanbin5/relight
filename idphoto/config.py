@@ -81,7 +81,7 @@ CROWN_MASK_AGREE = (0.85, 1.25)  # the measured mask top is trusted only within 
 # EXPERIMENTAL, not the default and not validated: CROP_MODE = "face" sizes the photo by chin
 # to skull top (the proportion rule without hair), so faces come out the same size whatever the
 # hairstyle, and uses the hair top only to keep the hair inside the photo. The skull proportion
-# itself fitted k = 1.83-2.03 over three people (about 10%; only one skull was seen under a cap,
+# itself fitted k = 1.84-2.02 over three people (about 10%; only one skull was seen under a cap,
 # the other two were marked through the hair), so this waits for more data.
 # Per-format shares are in geometry.FORMATS.
 CROP_MODE = "head"  # "head" (plan B.5): the head with its hair fills head_share of the photo

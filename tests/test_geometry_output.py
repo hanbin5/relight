@@ -73,6 +73,19 @@ def test_face_mode_keeps_big_hair_inside_the_photo():
         assert crop["chin"] <= config.CHIN_MAX + 1e-6
 
 
+
+@pytest.mark.parametrize("share", [0.80, 0.90])
+def test_face_mode_never_cuts_off_the_chin(share):
+    fmt = geometry.FORMATS["resume"]
+    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
+    crop = geometry.face_crop(geo, fmt, share)
+    assert crop["chin"] <= config.CHIN_MAX + 1e-6
+    assert crop["hair_top"] >= config.HAIR_MARGIN_MIN - 1e-6
+    # The face keeps its size unless chin and hair cannot both fit; then the crop zooms out.
+    assert crop["face_share"] <= share + 1e-6
+    if crop["action"] != "zoomed":
+        assert crop["face_share"] == pytest.approx(share)
+
 def test_print_sheets_fit_ten_and_eight_photos():
     for key, count in (("resume", 10), ("id", 8)):
         fmt = geometry.FORMATS[key]
