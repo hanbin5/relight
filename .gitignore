@@ -5,3 +5,5 @@ __pycache__/
 out/
 # downloaded by tools/fetch_model.py
 models/
+# volunteer test photos (plan C.1): keep local, delete after the semester
+testset/

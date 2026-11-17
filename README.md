@@ -78,13 +78,14 @@ Everything stays on the computer. Nothing is uploaded.
 |---|---|
 | `uv run python tools/relight_demo.py` | Reproduces Figure 3 with the real code: prints R_LR and shadow share before and after, saves `out/relight_demo.png` |
 | `uv run python tools/eval_synthetic.py` | Synthetic version of C.1: R_LR over a sweep of side lights, mask IoU against the true mask, staged faults and per-rule recall |
+| `uv run python tools/eval_checker.py testset/` | Precision and recall of each checker rule on real photos sorted into one folder per staged fault (C.1); saves every measured value to `out/checker_eval.csv` |
 | `uv run python tools/bench_fps.py` | Frames per second of the full live pipeline on this machine (target ≥ 10) |
 | `uv run python tools/process_image.py photo.jpg` | Runs the pipeline on still photos and saves the same files as the app |
 | `uv run python tools/capture_frames.py` | Saves webcam frames, their landmarks and each matting step to `out/debug/` (debugging, test sets). On macOS run it from a terminal that has camera access |
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (55 tests, about 10 s).
+Tests: `uv run pytest` (58 tests, about 15 s).
 
 ## Results so far
 
@@ -121,6 +122,7 @@ These are choices made while implementing the drafts in Appendix B. Each is comm
 
 ## Not done yet
 
+- Part D (checker and evaluation) steps, how to take test photos, and what D needs from the team: [docs/part-d-steps.md](docs/part-d-steps.md).
 - Not yet tested on the team's webcams and rooms. The Nov 8 gate (10 real frames, side and overhead light) is the next check.
 - The C.1 baselines (ArcFace identity, rembg masks, blind rating, usability test) are separate studies and are not in this repository.
 - Thresholds are the drafts from B.4 and are calibrated in week 5. EAR ≥ 0.23 is close to the canonical face's 0.234, so it may need a lower or per-user value.
