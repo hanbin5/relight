@@ -9,3 +9,7 @@ models/
 testset/
 # personal notes for Claude
 CLAUDE.local.md
+# PyCharm project settings (per user)
+.idea/
+# macOS folder settings
+.DS_Store
