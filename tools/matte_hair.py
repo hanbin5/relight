@@ -125,7 +125,7 @@ def preview_composite(matte: Matte, background=(47, 93, 154), original=None) -> 
 
 
 def panel(rgb: np.ndarray, trimap: np.ndarray, mattes: dict[str, Matte],
-          max_side: int | None = None) -> np.ndarray:
+          max_side: int | None = None, trimap_title: str = "Shared trimap") -> np.ndarray:
     h, w = trimap.shape
     scale = min(1.0, max_side / max(h, w)) if max_side else 1.0
     dh, dw = max(1, round(h * scale)), max(1, round(w * scale))
@@ -137,7 +137,7 @@ def panel(rgb: np.ndarray, trimap: np.ndarray, mattes: dict[str, Matte],
         cv2.putText(title, text, (6, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (15, 15, 15), 1)
         return np.concatenate([title, image])
 
-    upper, lower = [label(rgb, "Native head crop")], [label(np.repeat(trimap[..., None], 3, axis=2), "Shared trimap")]
+    upper, lower = [label(rgb, "Native head crop")], [label(np.repeat(trimap[..., None], 3, axis=2), trimap_title)]
     for name, matte in mattes.items():
         title = name + (" / input RGB" if name == "current" else " / recovered FG")
         upper.append(label(preview_composite(matte), title))
@@ -146,12 +146,14 @@ def panel(rgb: np.ndarray, trimap: np.ndarray, mattes: dict[str, Matte],
     return np.concatenate([np.concatenate(upper, axis=1), np.concatenate(lower, axis=1)], axis=0)
 
 
-def save_results(folder: Path, rgb: np.ndarray, trimap: np.ndarray, mattes: dict[str, Matte]) -> dict:
+def save_results(folder: Path, rgb: np.ndarray, trimap: np.ndarray, mattes: dict[str, Matte],
+                 trimap_title: str = "Shared trimap") -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     write_image(folder / "crop.png", rgb)
     write_image(folder / "trimap.png", trimap)
     write_image(folder / "comparison.jpg",
-                panel(rgb, trimap, mattes, max_side=min(480, 1600 // (len(mattes) + 1))))
+                panel(rgb, trimap, mattes, max_side=min(480, 1600 // (len(mattes) + 1)),
+                      trimap_title=trimap_title))
     # A 256-pixel patch at the upper central mask boundary, kept at 1:1 pixel scale.
     h, w = trimap.shape
     middle = np.flatnonzero(mattes["current"].alpha[:, w // 2] > 0.5)
@@ -162,7 +164,8 @@ def save_results(folder: Path, rgb: np.ndarray, trimap: np.ndarray, mattes: dict
     selection = np.s_[y0:y0 + size, x0:x0 + size]
     details = {name: Matte(matte.alpha[selection], matte.foreground[selection], matte.seconds)
                for name, matte in mattes.items()}
-    write_image(folder / "detail_1to1.png", panel(rgb[selection], trimap[selection], details))
+    write_image(folder / "detail_1to1.png",
+                panel(rgb[selection], trimap[selection], details, trimap_title=trimap_title))
     report = {"native_size_wh": [w, h], "detail_box_xyxy": detail_box, "methods": {}}
     for name, matte in mattes.items():
         write_image(folder / f"{name}_alpha.png", np.rint(matte.alpha * 65535).astype(np.uint16))

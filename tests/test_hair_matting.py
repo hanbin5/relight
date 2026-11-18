@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from idphoto import synthetic
-from tools import fba_reference, matte_hair
+from tools import fba_reference, matte_hair, refine_hair
 
 
 @pytest.fixture
@@ -103,6 +103,73 @@ def test_saving_mattes_preserves_native_alpha_and_foreground_rgba(mixed_edge, tm
 def test_fba_missing_assets_are_an_explicit_error(tmp_path):
     with pytest.raises(FileNotFoundError, match="accept-noncommercial"):
         fba_reference.verify_assets(tmp_path)
+
+
+@pytest.mark.parametrize("hair,wall", [((0.1, 0.12, 0.15), (0.75, 0.7, 0.6)),
+                                     ((0.85, 0.8, 0.7), (0.1, 0.15, 0.2))])
+def test_refinement_rejects_broad_leakage_but_keeps_long_thin_hairs(hair, wall):
+    alpha = np.zeros((80, 128), np.float32)
+    alpha[20:60, 10:40] = 1
+    alpha[15:20, 10:40] = 0.85
+    alpha[25:50, 40:75] = 0.2
+    alpha[55, 40:115] = 0.15
+    alpha[65:70, 90:100] = 0.2
+    trimap = np.full(alpha.shape, 128, np.uint8)
+    trimap[25:55, 15:35], trimap[:, -1] = 255, 0
+    true_alpha = np.zeros_like(alpha)
+    true_alpha[20:60, 10:40], true_alpha[55, 40:115] = 1, 0.15
+    true_alpha[15:20, 10:40] = 0.85
+    rgb = np.rint(255 * (true_alpha[..., None] * np.array(hair)
+                        + (1 - true_alpha[..., None]) * np.array(wall))).astype(np.uint8)
+    foreground = np.broadcast_to(np.array(wall, np.float32), rgb.shape).copy()
+    foreground[true_alpha > 0] = hair
+    foreground[15:20, 10:40] = wall
+    foreground[65:70, 90:100] = hair
+    original = matte_hair.Matte(alpha.copy(), foreground.copy(), 0)
+    refined, _ = refine_hair.refine_foreground(rgb, trimap, original, radius=2)
+    assert refined.alpha[28:47, 45:72].mean() < 0.01
+    np.testing.assert_array_equal(refined.alpha[55, 40:115], alpha[55, 40:115])
+    np.testing.assert_array_equal(refined.alpha[65:70, 90:100], 0)
+    np.testing.assert_array_equal(refined.alpha[alpha == 1], 1)
+    np.testing.assert_array_equal(refined.alpha[15:20, 10:40], alpha[15:20, 10:40])
+    np.testing.assert_array_equal(refined.foreground, foreground)
+    np.testing.assert_array_equal(original.alpha, alpha)
+    assert (refined.alpha <= alpha).all()
+
+
+def test_refinement_preserves_thin_detail_even_when_recovered_color_is_wrong():
+    alpha = np.zeros((64, 96), np.float32)
+    alpha[20:50, 10:30], alpha[35, 30:85] = 1, 0.12
+    trimap = np.full(alpha.shape, 128, np.uint8)
+    trimap[25:45, 15:25], trimap[:, -1] = 255, 0
+    rgb = np.full((*alpha.shape, 3), 180, np.uint8)
+    rgb[alpha == 1] = 30
+    foreground = rgb.astype(np.float32) / 255
+    refined, _ = refine_hair.refine_foreground(
+        rgb, trimap, matte_hair.Matte(alpha, foreground, 0), radius=2
+    )
+    np.testing.assert_array_equal(refined.alpha[35, 30:85], alpha[35, 30:85])
+
+
+def test_refinement_rejects_inconsistent_known_labels(mixed_edge):
+    rgb, trimap, alpha = mixed_edge
+    alpha = alpha.astype(np.float32)
+    alpha[trimap == 255] = 0.5
+    with pytest.raises(ValueError, match="respect the known"):
+        refine_hair.refine_foreground(rgb, trimap, matte_hair.Matte(alpha, rgb / 255, 0))
+
+
+def test_refinement_comparison_rejects_same_size_but_different_crop(mixed_edge, tmp_path):
+    rgb, trimap, alpha = mixed_edge
+    matte = matte_hair.Matte(alpha.astype(np.float32), rgb.astype(np.float32) / 255, 0)
+    for name, box in (("wide", [0, 0, 64, 48]), ("narrow", [1, 0, 65, 48])):
+        root = tmp_path / name
+        matte_hair.save_results(root / "photo", rgb, trimap, {"current": matte, "fba": matte})
+        report = {"cases": {"photo": {"source_sha256": "same-photo", "crop_box_xyxy": box}}}
+        (root / "report.json").write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="different photo or crop"):
+        refine_hair.main([str(tmp_path / "wide"), "--narrow", str(tmp_path / "narrow"),
+                          "--out", str(tmp_path / "result")])
 
 
 @pytest.mark.skipif(not (fba_reference.ASSETS / "FBA.pth").exists(), reason="download FBA research weights")
