@@ -98,7 +98,7 @@ class Worker(QThread):
             ctx, fired = pipeline.process(live, self.settings, landmarks=lm_live, timestamp_ms=ts, full_frame=frame)
 
             lock = getattr(source, "lock_state", "locked")
-            if lock == "locked" and ctx.face_mask is not None and ctx.face_mask.any():
+            if lock in ("locked", "partial") and ctx.face_mask is not None and ctx.face_mask.any():
                 if monitor.update(float(ctx.Y[ctx.face_mask].mean()), ctx.landmarks, ts) == "drifting":
                     lock = "drifting"
             frames = config.SMOOTH_FRAMES_FALLBACK if lock in FALLBACK_LOCKS else config.SMOOTH_FRAMES

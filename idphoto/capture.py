@@ -1,11 +1,21 @@
 """Module A: frame sources, with the webcam's exposure and white-balance lock (plan B.2).
 
 Auto exposure and white balance would shift brightness and color between frames and make
-the relit output flicker, so the camera settles for about 1.5 s and then both are locked.
-OpenCV's exposure flag differs by backend (V4L2: 1 manual / 3 auto; DirectShow and Media
-Foundation: 0.25 / 0.75), so each backend gets its own values and the result is read back.
-OpenCV's AVFoundation backend (macOS) offers no exposure control; there the lock is reported
-as unavailable and the light fit is averaged over more frames instead (C.4 fallback).
+the relit output flicker, so the camera settles (at least 1.5 s, and until the mean
+brightness is steady) and then both are locked. The lock state is one of:
+
+    warming      still settling
+    locked       exposure and white balance both locked and read back
+    partial      exposure locked, white balance could not be (many external webcams on macOS)
+    unsupported  the camera or backend has no lock; the light fit is averaged over more frames
+    failed       a lock was tried but did not hold; same fallback (C.4)
+
+Two capture paths exist. OpenCV (Windows, Linux, and macOS without pyobjc): its exposure
+flag differs by backend (V4L2: 1 manual / 3 auto; DirectShow and Media Foundation:
+0.25 / 0.75), so each backend gets its own values and the result is read back. On macOS,
+OpenCV's AVFoundation backend has no exposure control, so AVFoundationCamera captures through
+AVFoundation itself and locks with AVCaptureDevice (what the device supports: the built-in
+MacBook camera supports neither lock, and a Brio 300 supports the exposure lock only).
 LockMonitor then checks the lock: face brightness must stay steady while the user holds still.
 
 Every source returns (rgb uint8, landmarks or None); OpenCV is used here only for I/O.
@@ -46,9 +56,64 @@ def camera_permission() -> str:
     return {0: "not_determined", 1: "restricted", 2: "denied", 3: "authorized"}.get(status, "unknown")
 
 
-class Camera:
-    """A webcam. On macOS, create it on the main thread: only there can OpenCV ask the
-    user for camera access (the first attempt shows the request and fails; retry after it)."""
+def lock_outcome(exposure: bool | None, white_balance: bool | None) -> str:
+    """Lock state from what each control did. None: the camera has no such control;
+    True: it was set and read back as locked; False: it was set and did not hold.
+    Exposure is what matters most for flicker, so white balance alone is not enough."""
+    if exposure is None and white_balance is None:
+        return "unsupported"
+    if not exposure:
+        return "failed"
+    return "locked" if white_balance else "partial"
+
+
+class SettleDetector:
+    """Decides when the camera's auto exposure has settled and the lock may be set: at least
+    WARMUP_S have passed and the last few frames' mean brightness is steady, or WARMUP_MAX_S
+    have passed whatever the brightness does."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.start = clock()
+        self.recent: list = []
+
+    def update(self, rgb: np.ndarray) -> bool:
+        elapsed = self.clock() - self.start
+        self.recent = (self.recent + [float(rgb[::8, ::8].mean())])[-config.WARMUP_SETTLE_FRAMES :]
+        if elapsed >= config.WARMUP_MAX_S:
+            return True
+        if elapsed < config.WARMUP_S or len(self.recent) < config.WARMUP_SETTLE_FRAMES:
+            return False
+        spread = (max(self.recent) - min(self.recent)) / max(float(np.mean(self.recent)), 1.0)
+        return spread <= config.WARMUP_SETTLE_DRIFT
+
+
+class _LockingCamera:
+    """What both webcam classes share: warm up, lock once, unlock when released."""
+
+    lock_state = "warming"  # warming -> locked | partial | unsupported | failed
+
+    def _track(self, rgb: np.ndarray):
+        if self.lock_state == "warming" and self._settle.update(rgb):
+            self.lock_state = self.lock()
+
+    def lock(self) -> str:
+        raise NotImplementedError
+
+    def unlock(self):
+        """Give exposure and white balance back to the camera."""
+
+    def _release_lock(self):
+        if self.lock_state in ("locked", "partial"):
+            try:
+                self.unlock()
+            except Exception:  # the camera is going away anyway
+                pass
+
+
+class Camera(_LockingCamera):
+    """A webcam through OpenCV. On macOS, create it on the main thread: only there can OpenCV
+    ask the user for camera access (the first attempt shows the request and fails; retry)."""
 
     def __init__(self, index: int = 0, size=config.CAMERA_SIZE):
         import cv2
@@ -67,37 +132,218 @@ class Camera:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
         self.cap = cap
         self.backend = cap.getBackendName().upper()
-        self.opened_at = time.monotonic()
-        self.lock_state = "warming"  # warming -> locked | unsupported | failed
+        self._settle = SettleDetector()
         self.name = f"camera {index} ({self.backend})"
 
     def read(self):
         ok, bgr = self.cap.read()
         if not ok:
             return None, None
-        if self.lock_state == "warming" and time.monotonic() - self.opened_at >= config.WARMUP_S:
-            self.lock_state = self.lock()
-        return np.ascontiguousarray(bgr[:, :, ::-1]), None
+        rgb = np.ascontiguousarray(bgr[:, :, ::-1])
+        self._track(rgb)
+        return rgb, None
 
     def lock(self) -> str:
         """Lock exposure and white balance at their settled values; returns the lock state."""
         cv2, cap = self._cv2, self.cap
         flags = _EXPOSURE_FLAGS.get(self.backend)
         if flags is None:
-            return "unsupported"
-        exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
+            return lock_outcome(None, None)
+        exposure = cap.get(cv2.CAP_PROP_EXPOSURE)  # read both before leaving auto mode
         temperature = cap.get(cv2.CAP_PROP_WB_TEMPERATURE)
-        ok = cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, flags[0])
-        if exposure:
-            cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
-        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
-        if temperature > 0:
+        # cap.get() returns 0 for a property the backend lacks, so a lock counts only when
+        # the set call was accepted and the value reads back.
+        exposure_ok = bool(cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, flags[0])) \
+            and abs(cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) - flags[0]) < 1e-3
+        if exposure_ok and exposure:
+            cap.set(cv2.CAP_PROP_EXPOSURE, exposure)  # switching to manual may reset the value
+        wb_ok = bool(cap.set(cv2.CAP_PROP_AUTO_WB, 0)) and cap.get(cv2.CAP_PROP_AUTO_WB) == 0
+        if wb_ok and temperature > 0:
             cap.set(cv2.CAP_PROP_WB_TEMPERATURE, temperature)
-        ok = ok and abs(cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) - flags[0]) < 1e-3
-        return "locked" if ok else "failed"
+        return lock_outcome(exposure_ok, wb_ok)
+
+    def unlock(self):
+        flags = _EXPOSURE_FLAGS.get(self.backend)
+        if flags is not None:
+            self.cap.set(self._cv2.CAP_PROP_AUTO_EXPOSURE, flags[1])
+            self.cap.set(self._cv2.CAP_PROP_AUTO_WB, 1)
 
     def release(self):
+        self._release_lock()
         self.cap.release()
+
+
+def pixel_buffer_to_rgb(pixel_buffer) -> np.ndarray:
+    """A 32BGRA CVPixelBuffer as an RGB uint8 (H, W, 3) copy."""
+    import Quartz
+
+    read_only = getattr(Quartz, "kCVPixelBufferLock_ReadOnly", 1)
+    Quartz.CVPixelBufferLockBaseAddress(pixel_buffer, read_only)
+    try:
+        width = Quartz.CVPixelBufferGetWidth(pixel_buffer)
+        height = Quartz.CVPixelBufferGetHeight(pixel_buffer)
+        stride = Quartz.CVPixelBufferGetBytesPerRow(pixel_buffer)
+        base = Quartz.CVPixelBufferGetBaseAddress(pixel_buffer)
+        raw = np.frombuffer(base.as_buffer(stride * height), np.uint8).reshape(height, stride // 4, 4)
+        return np.ascontiguousarray(raw[:, :width, 2::-1])  # B, G, R, A -> R, G, B
+    finally:
+        Quartz.CVPixelBufferUnlockBaseAddress(pixel_buffer, read_only)
+
+
+_frame_delegate_class = None
+
+
+def _get_frame_delegate_class():
+    """The Objective-C object AVFoundation calls with each frame (made once, on first use)."""
+    global _frame_delegate_class
+    if _frame_delegate_class is None:
+        import objc
+        from Foundation import NSObject
+
+        class IdphotoFrameDelegate(NSObject):
+            def initWithCallback_(self, callback):
+                self = objc.super(IdphotoFrameDelegate, self).init()
+                if self is not None:
+                    self._callback = callback
+                return self
+
+            def captureOutput_didOutputSampleBuffer_fromConnection_(self, output, sample_buffer, connection):
+                self._callback(sample_buffer)
+
+        _frame_delegate_class = IdphotoFrameDelegate
+    return _frame_delegate_class
+
+
+# Session presets by width, smallest first (AVFoundation only offers fixed sizes).
+_PRESET_NAMES = [(640, "AVCaptureSessionPreset640x480"), (960, "AVCaptureSessionPreset960x540"),
+                 (1280, "AVCaptureSessionPreset1280x720"), (1920, "AVCaptureSessionPreset1920x1080")]
+
+
+class AVFoundationCamera(_LockingCamera):
+    """A webcam through AVFoundation (macOS, needs pyobjc), so exposure and white balance can
+    be locked with AVCaptureDevice, which OpenCV's backend cannot do. Create it on the main
+    thread: if camera access is not decided yet, this asks for it and raises; retry after."""
+
+    backend = "AVFOUNDATION"
+
+    def __init__(self, index: int = 0, size=config.CAMERA_SIZE):
+        import AVFoundation as AV
+        import dispatch
+        import Quartz
+
+        self._AV = AV
+        status = AV.AVCaptureDevice.authorizationStatusForMediaType_(AV.AVMediaTypeVideo)
+        if status == AV.AVAuthorizationStatusNotDetermined:
+            AV.AVCaptureDevice.requestAccessForMediaType_completionHandler_(AV.AVMediaTypeVideo, lambda granted: None)
+            raise RuntimeError("Camera access was requested: allow it, then try again.")
+        if status != AV.AVAuthorizationStatusAuthorized:
+            raise RuntimeError(f"Camera {index} is not available (camera access is denied).")
+        devices = list(AV.AVCaptureDevice.devicesWithMediaType_(AV.AVMediaTypeVideo))
+        if not 0 <= index < len(devices):
+            raise RuntimeError(f"Camera {index} is not available ({len(devices)} found).")
+        self.device = devices[index]
+
+        self._cond = threading.Condition()
+        self._frame, self._fresh = None, False
+        self.session = AV.AVCaptureSession.alloc().init()
+        for width, name in _PRESET_NAMES:
+            preset = getattr(AV, name, None)
+            if width >= size[0] and preset is not None and self.session.canSetSessionPreset_(preset):
+                self.session.setSessionPreset_(preset)
+                break
+        camera_input, error = AV.AVCaptureDeviceInput.deviceInputWithDevice_error_(self.device, None)
+        if camera_input is None:
+            raise RuntimeError(f"Camera {index} could not be opened: {error}")
+        output = AV.AVCaptureVideoDataOutput.alloc().init()
+        output.setVideoSettings_({Quartz.kCVPixelBufferPixelFormatTypeKey: Quartz.kCVPixelFormatType_32BGRA})
+        output.setAlwaysDiscardsLateVideoFrames_(True)
+        self._delegate = _get_frame_delegate_class().alloc().initWithCallback_(self._on_sample)
+        self._queue = dispatch.dispatch_queue_create(b"idphoto.camera", None)
+        output.setSampleBufferDelegate_queue_(self._delegate, self._queue)
+        if not (self.session.canAddInput_(camera_input) and self.session.canAddOutput_(output)):
+            raise RuntimeError(f"Camera {index} could not be set up.")
+        self.session.addInput_(camera_input)
+        self.session.addOutput_(output)
+        self.session.startRunning()
+        self._settle = SettleDetector()
+        self.name = f"{self.device.localizedName()} (AVFoundation)"
+
+    def _on_sample(self, sample_buffer):
+        import CoreMedia
+
+        try:
+            rgb = pixel_buffer_to_rgb(CoreMedia.CMSampleBufferGetImageBuffer(sample_buffer))
+        except Exception:  # a bad frame is skipped, the stream goes on
+            return
+        with self._cond:
+            self._frame, self._fresh = rgb, True
+            self._cond.notify()
+
+    def read(self):
+        with self._cond:
+            if not self._cond.wait_for(lambda: self._fresh, timeout=1.0):
+                return None, None
+            rgb, self._fresh = self._frame, False
+        self._track(rgb)
+        return rgb, None
+
+    def capabilities(self) -> dict:
+        """Which locks this camera offers (for `tools/check_lock.py`)."""
+        AV, dev = self._AV, self.device
+        return {"exposure_lock": bool(dev.isExposureModeSupported_(AV.AVCaptureExposureModeLocked)),
+                "white_balance_lock": bool(dev.isWhiteBalanceModeSupported_(AV.AVCaptureWhiteBalanceModeLocked))}
+
+    def lock(self) -> str:
+        """Lock exposure and white balance at their settled values; returns the lock state."""
+        AV, dev = self._AV, self.device
+        can = self.capabilities()
+        if not any(can.values()):
+            return lock_outcome(None, None)
+        done, _ = dev.lockForConfiguration_(None)
+        if not done:
+            return "failed"
+        try:
+            if can["exposure_lock"]:
+                dev.setExposureMode_(AV.AVCaptureExposureModeLocked)
+            if can["white_balance_lock"]:
+                dev.setWhiteBalanceMode_(AV.AVCaptureWhiteBalanceModeLocked)
+        finally:
+            dev.unlockForConfiguration()
+        exposure = dev.exposureMode() == AV.AVCaptureExposureModeLocked if can["exposure_lock"] else None
+        white_balance = dev.whiteBalanceMode() == AV.AVCaptureWhiteBalanceModeLocked if can["white_balance_lock"] else None
+        return lock_outcome(exposure, white_balance)
+
+    def unlock(self):
+        AV, dev = self._AV, self.device
+        done, _ = dev.lockForConfiguration_(None)
+        if not done:
+            return
+        try:
+            if dev.isExposureModeSupported_(AV.AVCaptureExposureModeContinuousAutoExposure):
+                dev.setExposureMode_(AV.AVCaptureExposureModeContinuousAutoExposure)
+            if dev.isWhiteBalanceModeSupported_(AV.AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance):
+                dev.setWhiteBalanceMode_(AV.AVCaptureWhiteBalanceModeContinuousAutoWhiteBalance)
+        finally:
+            dev.unlockForConfiguration()
+
+    def release(self):
+        self._release_lock()
+        self.session.stopRunning()
+
+
+def open_camera(index: int = 0, size=config.CAMERA_SIZE):
+    """The best webcam class for this machine: AVFoundation on macOS when pyobjc is there
+    (it can lock the exposure), OpenCV otherwise."""
+    if platform.system() == "Darwin":
+        try:
+            import AVFoundation  # noqa: F401
+            import dispatch  # noqa: F401
+            import Quartz  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            return AVFoundationCamera(index, size)
+    return Camera(index, size)
 
 
 class ImageSource:
@@ -201,7 +447,7 @@ def open_source(spec: str | None, camera_size=config.CAMERA_SIZE):
         if path.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
             return ImageSource(path)
         return VideoSource(path)
-    return Camera(int(spec or 0), camera_size)
+    return open_camera(int(spec or 0), camera_size)
 
 
 class FrameGrabber(threading.Thread):
