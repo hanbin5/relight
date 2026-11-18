@@ -88,7 +88,11 @@ def fit_light(Y: np.ndarray, normals: np.ndarray, skin: np.ndarray, iterations: 
     w = np.ones_like(y)
     for it in range(iterations + 1):
         Hw = H * w[:, None]
-        coef = np.linalg.solve(H.T @ Hw + np.diag(ridge), Hw.T @ y)
+        A, b = H.T @ Hw + np.diag(ridge), Hw.T @ y
+        try:
+            coef = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:  # normals that do not vary: take the smallest solution
+            coef = np.linalg.lstsq(A, b, rcond=None)[0]
         if it == iterations:
             break
         res = y - H @ coef
@@ -128,7 +132,7 @@ class Relighter:
         """
         h, w = ctx.Y.shape
         ctx.face_mask = np.zeros((h, w), bool)
-        if ctx.landmarks is None:
+        if not mesh.usable(ctx.landmarks):
             self._lost()
             ctx.relit_frame, ctx.ratio_map = ctx.linear_rgb, np.ones((h, w), np.float32)
             return ctx
@@ -142,7 +146,12 @@ class Relighter:
         Yc = npimg.resize(ctx.Y, S, S, kernel="linear", box=box)
         core = npimg.erode(cov, 1)
         lo, hi = config.FIT_Y_RANGE
-        skin = core & ~regions["features"] & (Yc > lo) & (Yc < hi)
+        # Where the face box sticks out of the frame, resizing repeats the edge pixels; those
+        # grid pixels are not skin and must not be fitted.
+        centers = (np.arange(S) + 0.5) * (box[2] - box[0]) / S
+        inside = ((box[1] + centers >= 0) & (box[1] + centers < h))[:, None] \
+            & ((box[0] + centers >= 0) & (box[0] + centers < w))[None, :]
+        skin = core & ~regions["features"] & inside & (Yc > lo) & (Yc < hi)
         if skin.sum() < 200:
             self._lost()
             ctx.relit_frame, ctx.ratio_map = ctx.linear_rgb, np.ones((h, w), np.float32)

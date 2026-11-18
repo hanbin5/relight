@@ -58,6 +58,17 @@ def canonical_pitch_ratio() -> float:
     return float((v[FOREHEAD, 1] - v[NOSE_TIP, 1]) / (v[NOSE_TIP, 1] - v[CHIN, 1]))
 
 
+def usable(lm: np.ndarray | None, min_size: float = 8.0) -> bool:
+    """True when the 468 face points are finite and span at least min_size pixels, so the box,
+    grid and normals can be computed. A broken detection (NaN, all zeros) is treated as a lost face."""
+    if lm is None or len(lm) < 468:
+        return False
+    p = lm[:468, :2]
+    if not np.isfinite(lm[:468]).all():
+        return False
+    return float(max(np.ptp(p[:, 0]), np.ptp(p[:, 1]))) >= min_size
+
+
 def face_box(lm: np.ndarray, pad: float = 1.08):
     """Square box (x0, y0, x1, y1) around the 468 face points."""
     p = lm[:468, :2]
