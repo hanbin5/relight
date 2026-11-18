@@ -6,6 +6,8 @@ relight `main` e96bb08 · `idphoto/matting.py` (Module B) · 촬영(셔터) 경�
 - 모든 그림은 main 코드를 단계별로 그대로 실행해 중간값을 꺼낸 것입니다. 마지막 알파는 실제 파이프라인 출력과 **픽셀 단위로 동일**합니다(4장 모두 최대 차이 0).
 - 그림 위에는 글자를 넣지 않았고, 설명은 각 그림 아래에 있습니다. 그림을 누르면 크게 볼 수 있습니다.
 
+기존 알고리즘을 유지한 채 GrabCut·Random Walker를 적용한 별도 비교 실험은 [11절](#11-사람-prior-대안--grabcutrandom-walker-실험)에 정리했습니다.
+
 ## 전체 흐름
 
 <table>
@@ -222,3 +224,56 @@ shot2는 오른쪽 아래 창밖 풍경이 어느 모델에도 없는 색이라 
 - 그 영역은 색 대비에만 의존하므로 어두운 방(검은 머리), 밝은 벽(흰 옷), 무채색 벽(회색·카키 옷)에서 취약합니다. 그림자 허용 배율이 이 혼동을 키웁니다.
 - 경계는 가이드 필터로 머리카락을 따라가지만, ±*r*/2 띠 제한 때문에 거친 마스크에서 빠진 잔머리는 복구되지 않습니다.
 - 정답 마스크로 잰 정량 평가(IoU 등)는 아직 없습니다. 이 문서의 수치는 영역 중앙값과 규칙 7 판정뿐입니다.
+
+## 11. 사람 prior 대안 — GrabCut·Random Walker 실험
+
+`tools/compare_matting.py`는 기존 방법과 두 연구의 공개 구현을 같은 사진에 실행하는 **오프라인 비교 도구**입니다. 앱의 `Matter`, GUI, 저장 경로는 변경하지 않았습니다. 본체의 NumPy 구현 원칙과 구분해, 연구 비교에만 OpenCV `grabCut`과 scikit-image `random_walker`를 사용합니다. 논문 전체의 재현이나 최종 매팅 구현은 아닙니다.
+
+- **[GrabCut (Rother 등, SIGGRAPH 2004)](https://www.microsoft.com/en-us/research/publication/grabcut-interactive-foreground-extraction-using-iterated-graph-cuts/)**: 전경·배경 GMM과 색 경계 비용을 이용한 반복 graph cut. seed 색을 각각 k-means 5개로 모델링하고, 밝기 배율 허용 없이 군집까지의 거리로 초기 probable FG/BG를 정합니다. 이후에는 OpenCV 구현을 5회 반복하며, 초기 probable 라벨은 바뀔 수 있습니다.
+- **[Random Walker (Grady, TPAMI 2006)](https://doi.org/10.1109/TPAMI.2006.233)**: 같은 seed에서 색 경계에 따른 그래프 가중치로 전경 도달 확률을 구합니다. sqrt-linear RGB, beta 130, `cg_j`, 허용오차 `1e-6`, 전경 확률 > 0.5를 사용합니다.
+
+두 방법 모두 기존 `gate`와 `likely`를 사용하지 않으며, gate 바깥도 분할 대상입니다. 다만 **아무 사전 가정도 없는 것은 아닙니다.** 자동 전경 seed는 침식한 얼굴 내부와 작은 머리·가슴 패치이고, 배경 seed는 넉넉한 머리 박스를 제외한 위쪽·턱 위 옆쪽 테두리(두께: 짧은 변의 4%)입니다. 아래 테두리는 옷일 수 있어 배경으로 지정하지 않습니다. 머리·가슴 패치나 테두리의 배경 가정도 틀릴 수 있으며, **이 seed는 두 연구 방법에 똑같이 적용되는 hard label**입니다. 기존 방법은 원래의 표본·prior를 그대로 사용합니다.
+
+사진마다 IMAGE 모드로 랜드마크를 독립 검출하고, 긴 변 최대 480 px의 전체 사진에서 비교합니다. 재조명은 끕니다. 비교 그림은 왼쪽부터 입력/seed, 기존 방법, GrabCut, Random Walker이며 위는 파란 배경 합성, 아래는 이진 마스크입니다. 기존 방법은 형태학·연결 영역 정리까지 마친 `coarse_mask`이고, 두 대안은 그런 후처리나 실루엣 자르기를 추가하지 않은 결과입니다. **가이드 필터·번짐 제거·규칙 7 fallback은 비교 합성에 적용하지 않습니다.** Random Walker의 확률도 물리적인 알파 매트가 아닙니다.
+
+### 실행
+
+```bash
+uv sync --extra research
+uv run python tools/fetch_model.py
+uv run --extra research python tools/compare_matting.py \
+  docs/evaluation/test/test5.jpg docs/evaluation/test/test3.jpg \
+  docs/evaluation/test/shot2.jpg docs/evaluation/test/test1.jpg \
+  --out out/matting-real
+uv run --extra research python tools/compare_matting.py \
+  --synthetic --out out/matting-synthetic
+```
+
+사진별 입력, seed, 세 마스크, 비교 그림, Random Walker 확률(16-bit PNG, 0–65535)을 저장하고 `report.json`에 해상도·설정·라이브러리 버전·전경 면적 비율·실행 시간·solver 경고를 남깁니다. 시간은 검출·입출력을 제외하며 기존 방법만 가이드 필터 등 추가 작업도 포함하므로, 엄밀한 속도 비교용 수치는 아닙니다. 합성 장면만 렌더러의 정답으로 IoU·precision·recall을 계산하고, **정답이 없는 실제 사진의 해당 지표는 `null`**로 둡니다. 전경 면적 증가를 정확도 향상으로 해석해서는 안 됩니다.
+
+자동 seed를 고치려면 저장된 `seeds.png`를 복사해 작업 해상도 그대로 `<사진 이름>.png`로 편집합니다. 8-bit 회색조에서 **0=미정, 128=배경, 255=전경**만 사용하며 전경·배경 각각 최소 5픽셀이 필요합니다.
+
+```bash
+uv run --extra research python tools/compare_matting.py \
+  docs/evaluation/test/test5.jpg --seeds-dir out/edited-seeds \
+  --out out/matting-edited
+```
+
+### 첫 적용 결과
+
+자동 seed, 위의 기본 설정으로 실행한 결과입니다. 아래 실제 사진 비교는 정성 관찰이며 정답 기반 순위가 아닙니다.
+
+| 사진 | GrabCut | Random Walker |
+|---|---|---|
+| test5 | 기존보다 머리·어깨 경계가 자연스러워졌지만 일부 누락은 남음 | 흰 티셔츠는 유지하나 머리·목 옆 벽도 포함 |
+| test3 | 머리와 맨투맨 외곽을 비교적 잘 유지 | 머리와 어깨 사이 배경까지 연결 |
+| shot2 | 카키 재킷 일부를 배경으로 제거 | 인물 주변 롤스크린까지 포함 |
+| test1 | 검은 옷이 많이 빠지고 어두운 배경이 섞임 | 검은 옷은 유지하나 머리 위·옆 배경이 섞임 |
+
+| 합성 장면 | 기존 IoU | GrabCut IoU | Random Walker IoU |
+|---|---:|---:|---:|
+| 밝은 벽·남색 상의 | 1.000 | 1.000 | 0.849 |
+| 베이지 벽·빨간 상의 | 0.999 | 1.000 | 0.843 |
+| 벽과 비슷한 상의 | 0.735 | 0.650 | 0.765 |
+
+단순한 합성 장면 세 개의 결과로 실제 사진 성능을 일반화할 수 없습니다. 현재로서는 **GrabCut을 더 살펴볼 근거는 있지만 기본 알고리즘을 대체할 근거는 부족합니다.** 특히 seed 배치와 색 모델 초기화가 중요합니다. 초기 실험에서 미정 영역을 모두 probable FG로 놓으면 배경까지 대부분 남았고, 모두 probable BG로 놓으면 작은 가슴 seed만 남고 옷이 크게 사라졌습니다. 위 결과는 이를 seed 색 기반 초기화로 보완한 설정입니다.

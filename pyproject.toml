@@ -16,6 +16,11 @@ dependencies = [
 [project.scripts]
 idphoto = "idphoto.gui:main"
 
+[project.optional-dependencies]
+research = [
+    "scikit-image>=0.25",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
