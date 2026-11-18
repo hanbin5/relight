@@ -375,6 +375,8 @@ uv run --extra hair-matting python tools/matte_hair.py \
 
 ## 13. 넓은 영역의 FBA 알파 누출 억제 실험
 
+색 기준, 알파 감쇠식, 연결성 처리의 구체적인 구현은 [FBA 알파 후처리 구현 문서](docs/module-b/fba-alpha-refinement.md)에 정리했습니다.
+
 `tools/refine_hair.py`는 12절의 **넓은 trimap을 그대로 두고**, 저장된 FBA 결과를 보수적으로 후처리합니다. crop을 줄이거나 고정된 사람 윤곽으로 자르지 않습니다. 학습·재추론 없이 원본 크기의 16-bit alpha와 8-bit 전경색 PNG를 읽으므로, FBA의 원래 float32 전경색과는 저장 양자화 차이가 있습니다. 이 실험도 앱에 연결하지 않았습니다.
 
 ```bash
