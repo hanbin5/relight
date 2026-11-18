@@ -120,6 +120,7 @@ These are choices made while implementing the drafts in Appendix B. Each is comm
 14. **Exposure lock:** OpenCV's macOS backend has no exposure control, so the lock is reported as unavailable there and the light is averaged over 10 frames instead of 5 (the C.4 fallback). The same fallback applies when face brightness drifts more than 3% while the head holds still.
 15. **Rule 7 fallback (C.4):** if the cutout check fails when a photo is taken, the saved photo keeps the original wall and the result window says so.
 16. **Print sheets** are made for the résumé and ID formats; the profile photo is for screens.
+17. **Rule 1 shadow share** is measured below the eyes and 4 px inside the face edge (on the 128 × 128 grid), not over the whole face. On real photos, bangs and hair at the temples fall inside the face outline and counted as shadow (9–33% on our 11 test photos, limit 5%); now they measure 0–2%. A side shadow still shows: an unrelit side-lit face gives 13–38%.
 
 ## Not done yet
 
