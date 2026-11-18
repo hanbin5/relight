@@ -7,3 +7,5 @@ out/
 models/
 # volunteer test photos (plan C.1): keep local, delete after the semester
 testset/
+# personal notes for Claude
+CLAUDE.local.md
