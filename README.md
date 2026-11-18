@@ -277,3 +277,98 @@ uv run --extra research python tools/compare_matting.py \
 | 벽과 비슷한 상의 | 0.735 | 0.650 | 0.765 |
 
 단순한 합성 장면 세 개의 결과로 실제 사진 성능을 일반화할 수 없습니다. 현재로서는 **GrabCut을 더 살펴볼 근거는 있지만 기본 알고리즘을 대체할 근거는 부족합니다.** 특히 seed 배치와 색 모델 초기화가 중요합니다. 초기 실험에서 미정 영역을 모두 probable FG로 놓으면 배경까지 대부분 남았고, 모두 probable BG로 놓으면 작은 가슴 seed만 남고 옷이 크게 사라졌습니다. 위 결과는 이를 seed 색 기반 초기화로 보완한 설정입니다.
+
+## 12. 원본 해상도 머리 매팅 실험
+
+`tools/matte_hair.py`는 머리 주변을 원본 픽셀 그대로 잘라 **연속적인 alpha와 전경색**을 추정하는 오프라인 실험입니다. 전체 사진을 축소한 뒤 마스크를 키우는 방법과, 원본 잔머리를 직접 관찰하는 방법을 구분합니다. 얼굴도 포함하는 head matte이며, 머리카락만의 의미 분할이나 동영상 추적은 아닙니다. **앱의 `idphoto/` 처리 경로는 변경하지 않았고, 추가 학습도 하지 않았습니다.**
+
+비교 대상은 [Closed-Form Matting](https://webee.technion.ac.il/people/anat.levin/), [KNN Matting](https://dingzeyu.li/projects/knn/), 학습형 [F, B, Alpha Matting](https://arxiv.org/abs/2003.07711)(FBA)입니다. 앞의 두 방법은 [PyMatting](https://pymatting.github.io/), FBA는 [저자 공개 구현과 가중치](https://github.com/MarcoForte/FBA_Matting)를 사용합니다. Deep Image Matting은 이번에 실행하지 않았습니다.
+
+### 실행
+
+FBA 저자 코드는 MIT이지만 **공개 가중치는 비상업적 용도로만 사용 가능합니다.** 제품 적용을 허용하는 라이선스로 해석하면 안 됩니다. 아래 명령은 이 제약을 확인한 후 외부 코드와 약 139 MB의 가중치를 내려받습니다. 사진은 업로드하지 않으며 추론은 로컬에서만 수행합니다. 모델과 출력은 각각 무시된 `models/`, `out/`에 저장합니다.
+
+```bash
+uv sync --extra hair-matting
+uv run --extra hair-matting python tools/fba_reference.py --accept-noncommercial
+
+# FBA: 원본 머리 crop이 크면 겹치는 타일로 처리
+uv run --extra hair-matting python tools/matte_hair.py \
+  docs/evaluation/test/test5.jpg --out out/hair-native-large
+
+# 같은 원본 crop / trimap으로 FBA와 비학습형 매팅 비교
+uv run --extra hair-matting python tools/matte_hair.py \
+  docs/evaluation/test/test3.jpg docs/evaluation/test/test1.jpg \
+  docs/evaluation/test/shot2.jpg --methods fba cf knn \
+  --out out/hair-native-small
+```
+
+고정한 저자 소스 커밋은 `8dd100d760186150710510ee8d78ed916cdb17a4`, 가중치 SHA-256은 `f3f8a2b6cefd7200368b6008a712468ed1debc6658693db31b0f719f658a2967`입니다. 실행 전에 소스 버전·수정 여부와 가중치 해시를 확인하고, 가중치는 `torch.load(..., weights_only=True)`로 읽습니다. 추론 중 자산을 자동 다운로드하거나 누락 시 다른 모델로 대체하지 않습니다.
+
+### Crop과 trimap이 주는 제약
+
+얼굴 검출과 기존 마스크 생성만 긴 변 최대 640픽셀에서 수행합니다. 랜드마크를 원본 좌표로 옮긴 뒤 얼굴 폭과 눈–턱 거리로 넉넉한 head ROI를 정하고, **RGB crop과 매팅 입력은 축소하지 않습니다.** `--box x0 y0 x1 y1`로 원본 좌표의 ROI를 직접 지정할 수도 있습니다(사진 한 장만 가능). 기본 crop은 턱 조금 아래에서 끝나므로 긴 머리를 모두 포함한다는 보장은 없습니다.
+
+자동 trimap은 기존 alpha를 보간하고 0.5에서 이진화한 뒤, 얼굴 폭의 0.06만큼 안쪽을 확정 전경으로, `--band`(기본 0.25)만큼 팽창한 바깥을 확정 배경으로 정합니다. 얼굴 내부도 확정 전경으로 둡니다. 나머지가 미정 영역입니다. 따라서 **기존 person prior의 영향을 완전히 제거한 실험은 아닙니다.** 확정 배경으로 잘못 지정한 잔머리나 crop 밖의 머리는 FBA도 복구할 수 없습니다. ROI 위·좌·우 끝에 전경이 닿으면 경고하지만 자동 확장하지는 않습니다.
+
+원본 해상도의 trimap을 직접 고쳐 이 영향을 분리할 수 있습니다.
+
+```bash
+# 추론 없이 crop.png / trimap.png 준비
+uv run python tools/matte_hair.py docs/evaluation/test/test3.jpg \
+  --prepare-only --out out/hair-prepare
+mkdir -p out/hair-edited
+cp out/hair-prepare/test3/trimap.png out/hair-edited/test3.png
+
+# out/hair-edited/test3.png를 편집한 뒤 동일 crop으로 재실행
+uv run --extra hair-matting python tools/matte_hair.py \
+  docs/evaluation/test/test3.jpg --trimap-dir out/hair-edited \
+  --out out/hair-replay
+```
+
+Trimap은 crop과 같은 크기의 8-bit 회색조 PNG로 **0=확정 배경, 128=미정, 255=확정 전경**입니다. 11절의 seed-map 부호와 다르므로 그대로 재사용하면 안 됩니다. 전경·배경이 모두 있어야 하며, 잘못된 크기나 값은 오류로 처리하고 자동 보정/축소하지 않습니다.
+
+FBA의 inductive bias는 trimap 조건, 영상의 공간 구조를 학습한 모델, 전경·배경·alpha를 함께 추정하는 구조에서 옵니다. 하지만 색 혼합식을 만족하는 해는 유일하지 않으며, 이 구조가 머리카락과 나뭇결을 반드시 구분해 준다는 뜻은 아닙니다.
+
+### 원본 해상도와 결과 해석
+
+FBA는 기본 `--tile-size 768 --overlap 96`으로 미정 영역이 있는 타일만 추론하고, 겹친 예측을 가중 평균합니다. 각 타일은 8의 배수 크기로 **패딩**할 뿐 리사이즈하지 않습니다. 타일별 문맥 차이와 경계 오차는 남을 수 있으므로 논문의 전체 영상 추론을 그대로 재현했다고 주장하지 않습니다. CF/KNN은 메모리 안전을 위해 crop을 100만 픽셀 이하로 제한하며, 초과하면 `--methods fba`를 안내하는 오류를 냅니다.
+
+이 어댑터는 CPU 추론만 지원합니다. Apple MPS에서는 참고 모델의 일부 adaptive pooling 크기를 처리하지 못하는 것을 확인했으며, 입력을 임의로 리사이즈하거나 장치를 조용히 바꾸는 우회는 하지 않았습니다.
+
+사진별 출력은 다음과 같습니다.
+
+| 파일 | 의미 |
+|---|---|
+| `crop.png`, `trimap.png` | 원본 RGB crop과 실제 사용한 trimap |
+| `comparison.jpg` | 보기 좋게 축소한 전체 비교. 위는 합성, 아래는 alpha |
+| `detail_1to1.png` | 기존 마스크의 위쪽 중앙 경계에서 고른 최대 256×256 원본 픽셀 비교. 확대/축소 없음 |
+| `*_alpha.png`, `*_rgba.png` | 원본 크기의 16-bit alpha와 8-bit straight RGBA |
+| `*_blue.png`, `*_white.png` | 추정한 전경색을 이용한 합성 |
+| `*_naive.png` | 같은 alpha에 원본 RGB를 사용한 합성(FBA/CF/KNN). 전경색 복원 효과를 분리해 확인 |
+
+`current`는 **640픽셀 작업 영상에서 계산한 기존 alpha를 보간하고 원본 RGB로 합성한 기준선**입니다. 기존 앱의 despill 합성을 그대로 재현한 결과는 아닙니다. 반면 FBA/CF/KNN은 원본 crop에서 alpha와 전경색을 추정하므로, 합성 차이가 모두 alpha 개선 때문이라고 해석하면 안 됩니다. 합성과 모델 입력은 참고 구현의 sRGB 관례를 따르며 앱의 선형광 합성과도 구분합니다.
+
+`report.json`에는 원본 crop 좌표·크기, 입력/trimap 해시, 라이브러리 버전, 모델 버전, 설정, 타일 수, 추론 시간, crop 끝 접촉 여부와 Python solver 경고를 저장합니다. CF의 불완전 Cholesky 전처리기가 shift를 자동 재시도하며 출력하는 성능 경고는 콘솔에도 나타날 수 있습니다. **실제 alpha 정답이 없어 정확도 지표는 `null`입니다.** 미정 영역이나 반투명 alpha의 면적 비율도 정확도 점수가 아닙니다.
+
+### 첫 적용 결과와 한계
+
+기본 자동 trimap, CPU 4스레드에서 관찰한 결과입니다. 시간은 모델 로딩·검출·입출력을 제외한 해당 매팅 단계의 대략적인 값이며, 실시간 처리 성능을 뜻하지 않습니다.
+
+| 사진 | 원본 crop | 관찰 |
+|---|---|---|
+| test3 | 673×732 | FBA와 CF가 기존 마스크에서 빠진 곱슬머리를 상당 부분 복원. CF는 주변 배경 조각, KNN은 더 넓은 잔상을 남김 |
+| test1 | 692×654 | FBA/CF 외곽은 개선되지만 어두운 배경과의 모호함이 남음. KNN 전경은 crop 위쪽까지 닿음 |
+| shot2 | 439×501 | FBA/CF가 머리 외곽을 복원하지만 블라인드·끈 같은 배경 구조가 남을 수 있음 |
+| test5 | 2152×2431 | FBA 16타일, 약 11–12초. 가는 잔머리를 복원하지만 머리 위·옆에 벽의 나뭇결과 옅은 잔상도 남음 |
+
+작은 crop의 FBA는 약 0.3–1.2초, CF는 약 0.5–1.8초, KNN은 약 0.8–2.4초였습니다. 첫 추론의 초기화 비용과 반복 실행에 따른 편차도 포함합니다. test5는 100만 픽셀을 넘으므로 CF/KNN을 실행하지 않았습니다. 새 그림자 사진 test9는 이번 실험에 사용하지 않았습니다.
+
+test5에서 trimap 영향만 보기 위해 다음 비교도 수행했습니다.
+
+```bash
+uv run --extra hair-matting python tools/matte_hair.py \
+  docs/evaluation/test/test5.jpg --band 0.12 --out out/hair-native-narrow
+```
+
+미정 영역을 얼굴 폭 0.25에서 0.12로 줄이면 crop 내 미정 픽셀 비율이 약 41%에서 24%로 줄고, 나뭇결 잔상도 눈에 띄게 감소했습니다. 그러나 멀리 뻗은 잔머리를 확정 배경으로 잘라낼 위험도 커집니다. **0.12가 보편적인 최적값이라는 근거는 없으므로 기본값은 바꾸지 않았습니다.** 현재 결론은 원본 해상도 매팅을 적용할 가치는 있지만, 모델 교체만으로 해결되지 않으며 crop·trimap의 확정 영역 품질을 함께 검증해야 한다는 것입니다.

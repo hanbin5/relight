@@ -20,6 +20,11 @@ idphoto = "idphoto.gui:main"
 research = [
     "scikit-image>=0.25",
 ]
+hair-matting = [
+    "gdown>=5.2",
+    "pymatting>=1.1.14",
+    "torch>=2.6",
+]
 
 [build-system]
 requires = ["hatchling"]
