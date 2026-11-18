@@ -49,6 +49,7 @@ SPILL_ALPHA_FLOOR = 0.1  # F = (I - (1 - a) mu_B) / max(a, 0.1)
 EVEN_LIGHT_RANGE = (0.90, 1.10)  # rule 1: R_LR
 SHADOW_FACTOR = 0.45  # rule 1: a skin pixel darker than 0.45 x face mean is shadow
 SHADOW_MAX = 0.05  # rule 1: shadow share < 5%
+SHADOW_EDGE_PX = 4  # rule 1: shadow is measured below the eyes, this far inside the face edge (128 px grid)
 GLARE_Y, GLARE_SAT = 0.94, 0.12  # rule 2: glare pixel
 GLARE_FACE_MAX = 0.01  # rule 2: < 1% of the face
 GLARE_LENS_MAX = 0.005  # rule 2: "no glare on lenses", with a tiny tolerance for noise

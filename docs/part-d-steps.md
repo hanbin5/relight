@@ -50,6 +50,6 @@ Get consent before taking anyone's photo. `testset/` is in `.gitignore`, so **do
 
 ## Notes so far
 
-- On synthetic photos with landmarks from MediaPipe, a good face failed rule 6 (lip gap 0.068, bound < 0.03). It may only be the synthetic face, but check rule 6 first on the real good photos.
-- The README already flags EAR ≥ 0.23 (rule 5) as probably too tight.
+- First run on the 11 photos in `docs/evaluation/test/` (all good photos, 5 people), Nov 18: 0 of 11 passed every rule with the draft bounds. Rules 2, 5 and 6 passed all 11 (the rule 6 worry was only the synthetic face). Rule 4 failed 10 (mostly pitch ratio 1.16–1.68), rule 3 failed 7 (low-res webcams), rule 7 failed 6.
+- Rule 1 counted bangs and hair at the temples as shadow (9–33% of the face; glasses frames were barely involved). Fixed: the shadow share is now measured below the eyes, 4 px inside the face edge. On the same photos it is 0–2%, and rule 1 failed 1 of 11 instead of 11 (test1, R_LR 0.89). Without relighting, a synthetic side light still gives 13–38% shadow, so real shadows are still caught.
 - `eval_checker.py` runs each photo on its own, so rule 3 uses the starting bound (120), not the per-camera one. Pick each camera's bound from the sharpness values in the CSV.

@@ -89,7 +89,11 @@ class Checker:
         Y = color.luminance(npimg.resize(ctx.relit_frame, S, S, "linear", box=box))
         skin = npimg.erode(reg["oval"], 1) & ~reg["features"]
         r_lr = mesh.cheek_balance(Y, reg, skin)
-        shadow = mesh.shadow_share(Y, skin, config.SHADOW_FACTOR)
+        # Shadow share only below the eyes and away from the face edge: on real photos, bangs
+        # and hair at the temples fall inside the face outline and were counted as shadow.
+        eye_y = g[list(mesh.EYE_R) + list(mesh.EYE_L), 1].max()
+        lower = npimg.erode(skin, config.SHADOW_EDGE_PX) & (np.arange(S)[:, None] > eye_y)
+        shadow = mesh.shadow_share(Y, lower, config.SHADOW_FACTOR)
         lo, hi = config.EVEN_LIGHT_RANGE
         ok = bool(lo <= r_lr <= hi and shadow < config.SHADOW_MAX)
         return Verdict(1, RULES[1], ok, r_lr, f"R_LR {lo:.2f}–{hi:.2f}; shadow < {config.SHADOW_MAX:.0%}",
