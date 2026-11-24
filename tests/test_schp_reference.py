@@ -103,12 +103,13 @@ def test_schp_reference_runs_on_cpu_at_input_resolution(parsing_scene):
 
 @pytest.mark.parametrize("full_grid", [False, True])
 @pytest.mark.parametrize("with_fba", [False, True])
-def test_schp_evaluation_keeps_main_and_fba_baselines(
-        parsing_scene, tmp_path, monkeypatch, full_grid, with_fba):
+@pytest.mark.parametrize("with_schp,with_sapiens", [(True, False), (False, True), (True, True)])
+def test_parser_evaluation_keeps_main_and_fba_baselines(
+        parsing_scene, tmp_path, monkeypatch, full_grid, with_fba, with_schp, with_sapiens):
     import csv
     import sys
 
-    from tools import eval_clothing, fba_reference, schp_reference
+    from tools import eval_clothing, fba_reference, sapiens_reference, schp_reference
 
     rgb, lm, before, clothing, background = parsing_scene
     before.output_frame = rgb / 255
@@ -129,6 +130,10 @@ def test_schp_evaluation_keeps_main_and_fba_baselines(
         def predict(self, image):
             np.testing.assert_array_equal(image, rgb)
             return clothing, background
+
+    class FakeSapiens(FakeSCHP):
+        def __init__(self, device, layout, gamma):
+            assert device == "cpu" and layout == "stretch" and gamma == 1.0
 
     class FakeFBA:
         def process(self, image, trimap, tile_size, overlap):
@@ -156,14 +161,19 @@ def test_schp_evaluation_keeps_main_and_fba_baselines(
     monkeypatch.setattr(eval_clothing, "write_sheets",
                         lambda panels, titles, prefix, _out: sheets.update({prefix: (panels, titles)}))
     monkeypatch.setattr(schp_reference, "SCHPReference", FakeSCHP)
+    monkeypatch.setattr(sapiens_reference, "SapiensReference", FakeSapiens)
     monkeypatch.setattr(fba_reference, "FBAReference", FakeFBA)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(set_num_threads=lambda _: None))
     cache, out = tmp_path / "cache", tmp_path / "out"
     cache.mkdir()
     np.save(cache / "case-live.npy", lm)
-    args = ["eval_clothing.py", "--schp", "--cache", str(cache), "--out", str(out)]
+    args = ["eval_clothing.py", "--cache", str(cache), "--out", str(out)]
+    if with_schp:
+        args.append("--schp")
     if with_fba:
         args.append("--fba")
+    if with_sapiens:
+        args.append("--sapiens")
     if full_grid:
         args.append("--full-grid")
     monkeypatch.setattr(sys, "argv", args)
@@ -174,14 +184,18 @@ def test_schp_evaluation_keeps_main_and_fba_baselines(
     if with_fba:
         np.testing.assert_array_equal(calls[0], eval_clothing.fba_trimap(rgb, lm, before))
         np.testing.assert_array_equal(calls[1], eval_clothing.fba_trimap(rgb, lm, after))
-    expected = combine_with_main(before, lm, clothing, background)
+    expected = combine_with_main(before, lm, clothing, background) * (with_schp + with_sapiens)
+    assert len(composites) == len(expected)
     for actual, alpha in zip(composites, expected):
         np.testing.assert_array_equal(actual, alpha)
     panels, titles = sheets["comparison"]
     expected_titles = ["Original", "Main"] + (["FBA"] if with_fba else [])
     expected_titles += ["Previous clothing", "Clothing (NumPy)"]
     expected_titles += (["NumPy + FBA"] if with_fba else [])
-    expected_titles += ["Main + SCHP clothing", "Main + SCHP person"]
+    if with_schp:
+        expected_titles += ["Main + SCHP\nclothing", "Main + SCHP\nperson"]
+    if with_sapiens:
+        expected_titles += ["Main + Sapiens\nclothing", "Main + Sapiens\nperson"]
     assert titles == expected_titles
     assert len(panels[0]) == len(titles) + 1
     with (out / "measurements.csv").open(newline="") as stream:
@@ -189,3 +203,8 @@ def test_schp_evaluation_keeps_main_and_fba_baselines(
     assert row["previous_clothing"] == eval_clothing.PREVIOUS_CLOTHING
     assert int(row["crop_vs_previous_added"]) > 0
     assert int(row["clothing_used_samples"]) == 80
+    if with_schp and with_sapiens:
+        assert int(row["sapiens_clothing_vs_schp_added"]) == 0
+        assert int(row["sapiens_person_vs_schp_removed"]) == 0
+    elif with_sapiens:
+        assert "sapiens_person_vs_schp_removed" not in row

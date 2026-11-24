@@ -114,7 +114,7 @@ class SCHPReference:
 
 def combine_with_main(result, lm: np.ndarray, clothing: np.ndarray,
                       background: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return garment-only and whole-person SCHP combinations with a main alpha."""
+    """Return garment-only and whole-person parsing combinations with a main alpha."""
     alpha, face = result.alpha, result.face_mask
     if alpha is None or alpha.ndim != 2 or face is None or face.shape != alpha.shape or not face.any():
         raise ValueError("Main alpha and a nonempty face mask must match.")
@@ -122,7 +122,7 @@ def combine_with_main(result, lm: np.ndarray, clothing: np.ndarray,
             or not np.isfinite(alpha).all() or not np.isfinite(clothing).all()
             or not np.isfinite(background).all()
             or any(a.min() < 0 or a.max() > 1 for a in (alpha, clothing, background))):
-        raise ValueError("Alpha and SCHP probabilities must match and be finite in [0, 1].")
+        raise ValueError("Alpha and parsing probabilities must match and be finite in [0, 1].")
     f = matting.face_measures(lm)
     fw, ec, cx, chin_y = f["fw"], f["ec"], f["cx"], f["chin"][1]
     if not np.isfinite([fw, ec, cx, chin_y]).all() or fw <= 0 or ec <= 0:

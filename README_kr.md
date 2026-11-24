@@ -2,34 +2,36 @@
 
 # Module B 옷 영역 복원 실험
 
-![대표 사진의 원본과 옷 영역 실험 결과](docs/evaluation/clothing/research/live/comparison.jpg)
+![대표 사진의 원본과 옷 영역 실험 결과](docs/evaluation/clothing/research-gamma/live/comparison.jpg)
 
 기존 배경 분리 과정이 익숙하지 않다면 먼저 [Module B 배경 분리 설명](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)을 읽어 주세요. 이 문서는 기존 과정을 반복하지 않고, 빠진 옷을 복원하기 위해 시도한 방법과 그 결과를 설명합니다. 변경은 오프라인 실험에만 머물지 않고 앱의 `idphoto/matting.py`에 적용되어 있습니다.
 
-여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP와 FBA는 앱에 연결하지 않은 오프라인 실험이며, FBA 가중치는 비상업 용도입니다.
+여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP·Sapiens·FBA는 앱에 연결하지 않은 오프라인 실험이며 Sapiens와 FBA에는 비상업 제한이 있습니다.
 
-## 새로운 실험: 12장 전체
+## 최신 실험: 12장 전체
 
-위 그림은 `Original / Main / FBA / Previous clothing / Clothing (NumPy) / NumPy + FBA / Main + SCHP clothing / Main + SCHP person` 순서입니다. `Previous clothing`은 직전 앱 코드 `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`, `Clothing (NumPy)`는 새 근접 촬영 보정을 포함한 현재 앱 코드입니다. `FBA`는 Main alpha로, `NumPy + FBA`는 현재 옷 alpha로 **같은 규칙으로 만든 자동 트라이맵**을 받아 원본 사진을 처리합니다. SCHP 두 결과는 FBA가 아닌 **Main alpha**에 파싱 결과를 결합합니다. SCHP clothing은 상의·원피스·코트·점프수트·스카프만, SCHP person은 머리카락을 포함한 전체 인물 예측을 사용합니다.
+`Previous clothing`은 직전 앱 코드 `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`, `Clothing (NumPy)`는 현재 근접 촬영 보정을 포함한 앱 코드입니다. `FBA`는 Main alpha로, `NumPy + FBA`는 현재 옷 alpha로 **같은 규칙으로 만든 자동 트라이맵**을 받아 원본 사진을 처리합니다. SCHP와 Sapiens는 FBA가 아닌 **Main alpha**에 파싱 결과를 결합합니다. `clothing`은 옷 클래스만, `person`은 머리카락을 포함한 전체 인물 예측을 사용합니다. 여기서 Sapiens는 비율 보존 검은 패딩과 고정 감마 0.55를 모델 입력에만 적용합니다.
 
-12장의 동일한 640 px 너비 입력과 랜드마크로 라이브(`s=2`) 및 [전체 격자 `s=1`](docs/evaluation/clothing/research/full-grid/comparison.jpg)를 평가했습니다. 표와 [라이브 CSV](docs/evaluation/clothing/research/live/measurements.csv), [전체 격자 CSV](docs/evaluation/clothing/research/full-grid/measurements.csv)에 12장 모두 남겼습니다. `shot2`–`shot4`는 비슷한 장면이라 위 그림에는 `shot2`만 표시합니다. 아래 관찰의 좌우는 사진을 보는 방향입니다.
+12장의 동일한 640 px 너비 입력과 랜드마크로 라이브(`s=2`) 및 [전체 격자 `s=1`](docs/evaluation/clothing/research-gamma/full-grid/comparison.jpg)를 평가했습니다. [라이브 CSV](docs/evaluation/clothing/research-gamma/live/measurements.csv)와 [전체 격자 CSV](docs/evaluation/clothing/research-gamma/full-grid/measurements.csv)에 12장 모두 남겼습니다. `shot2`–`shot4`는 비슷한 장면이라 그림에는 대표인 `shot2`만 표시합니다. 아래 관찰의 좌우는 사진을 보는 방향입니다.
 
-| 사진 | 현재 NumPy 옷 결과: 이전과 비교 | SCHP 결합 관찰 |
-|---|---|---|
-| shot2 | 라이브 재킷은 남지만 바깥 경계가 거칠고 전체 격자에서는 조각납니다. | 재킷이 더 넓게 남고 person은 머리도 복원합니다. |
-| shot3 | 이전과 같은 이진 마스크이며 왼쪽 재킷 일부가 빠집니다. | 재킷이 더 남지만 모드에 따라 왼쪽 끝이 일부 비칩니다. |
-| shot4 | 이전과 같은 이진 마스크이며 오른쪽 배경 물체도 남습니다. | 재킷이 더 남고 오른쪽 물체는 줄지만 경계가 완벽하지 않습니다. |
-| shot5 | 표본이 0개였던 근접 재킷의 양쪽이 돌아왔지만 오른쪽 어깨가 거칩니다. | 두 결합 모두 재킷이 더 남고 person은 잘린 머리도 복원합니다. |
-| test1 | 이전과 같은 이진 마스크이며 어두운 방 물체와 옷 구멍이 남습니다. | 옆의 어두운 배경이 줄고 상의가 더 연결되지만, 사람 전체 결과도 경계가 완벽하지 않습니다. |
-| test2 | 이전과 같은 이진 마스크이며 양옆의 어두운 물체가 남습니다. | person은 머리와 배경을 개선하지만 오른쪽 어깨·소매 누락과 잔여 조각이 뚜렷합니다. |
-| test3 | 이전과 같은 이진 마스크이며 목 옆 패임과 오른쪽 배경이 남습니다. | 배경이 줄고 상의가 이어지며 person은 머리도 더 남깁니다. |
-| test4 | 이전과 같은 이진 마스크이며 파란 물체와 어두운 배경이 남습니다. | 옷 주위의 물체가 줄고 person은 머리도 더 남깁니다. |
-| test5 | 이전과 같은 이진 마스크이며 오른쪽 흰 어깨와 왼쪽 벽 조각이 남습니다. | 왼쪽 벽 조각이 줄지만 옷과 목 주변 경계는 완벽하지 않습니다. |
-| test6 | 이전과 같은 이진 마스크이며 어깨 뒤 벽 누출이 남습니다. | 어깨 뒤 벽은 줄지만 왼쪽 아래 밝은 전경에 흰 구멍이 생깁니다. |
-| test8 | 이전과 같은 이진 마스크이며 칼라 패임과 각진 경계가 남습니다. | 상의가 더 이어지지만 오른쪽 소매 끝에 회색 잔여물이 보입니다. |
-| test9 | 이전과 같은 이진 마스크이며 후드 누락, 연결된 배경과 잘린 머리가 남습니다. | 후드가 더 남고 person은 머리도 복원하지만 옷의 아래 경계가 거칩니다. |
+| 사진 | NumPy 옷과 배경 | SCHP person | Sapiens 패딩 + 감마 person | Sapiens 대 SCHP 픽셀: 라이브; 전체 격자 |
+|---|---|---|---|---|
+| shot2 | 재킷은 남지만 경계가 거칠고 전체 격자에서는 조각납니다. | 재킷과 머리가 더 남습니다. | 재킷과 머리가 비슷하게 남지만 경계가 완벽하지 않습니다. | +343/-690; +382/-703 |
+| shot3 | 왼쪽 재킷 일부가 빠집니다. | 재킷이 더 남지만 왼쪽 끝이 일부 비칠 수 있습니다. | 재킷과 머리가 남지만 경계가 완벽하지 않습니다. | +444/-644; +453/-641 |
+| shot4 | 오른쪽 배경 물체가 남습니다. | 재킷이 더 남고 물체가 줄어듭니다. | 재킷이 남고 물체가 줄지만 경계가 거칩니다. | +446/-629; +447/-630 |
+| shot5 | 근접 재킷의 양쪽이 돌아오지만 오른쪽 어깨가 거칩니다. | 재킷과 잘린 머리가 돌아옵니다. | 재킷과 머리가 돌아오지만 경계가 완벽하지 않습니다. | +1,259/-750; +1,259/-750 |
+| test1 | 어두운 방 물체와 옷 구멍이 남습니다. | 옆 배경이 줄고 상의가 더 연결됩니다. | 패딩만 쓴 경우보다 상의가 많이 돌아오지만 뚜렷한 구멍과 잘린 머리가 남습니다. | +1,382/-4,094; +1,458/-3,964 |
+| test2 | 양옆의 어두운 물체가 남습니다. | 머리와 배경은 개선되지만 오른쪽 어깨·소매가 잘립니다. | 감마를 써도 상의 거의 전체가 사라집니다. | +0/-54,200; +0/-54,202 |
+| test3 | 목 옆 패임과 오른쪽 배경이 남습니다. | 배경이 줄고 상의와 머리가 더 남습니다. | 회색 상의는 남지만 머리가 많이 잘립니다. | +626/-10,381; +627/-8,780 |
+| test4 | 파란 물체와 어두운 배경이 남습니다. | 옷 주위 물체가 줄고 머리가 더 남습니다. | 상의 거의 전체가 사라집니다. | +0/-56,237; +0/-56,057 |
+| test5 | 오른쪽 흰 어깨와 왼쪽 벽 조각이 남습니다. | 벽 조각이 줄지만 옷과 목 경계가 완벽하지 않습니다. | 벽은 줄지만 상의 그림에 뚜렷한 구멍이 납니다. | +6,993/-22,509; +6,792/-22,533 |
+| test6 | 어깨 뒤 벽 누출이 남습니다. | 벽은 줄지만 밝은 전경에 흰 구멍이 남습니다. | 벽은 줄지만 상의와 아래 전경이 크게 잘립니다. | +10,591/-41,028; +10,227/-41,082 |
+| test8 | 칼라 패임과 각진 경계가 남습니다. | 상의가 더 이어지지만 오른쪽 소매에 잔여물이 보입니다. | 패딩만 쓴 경우보다 상의 일부가 돌아오지만 점무늬처럼 구멍이 납니다. | +4,898/-4,278; +4,871/-4,184 |
+| test9 | 후드와 머리가 잘리고 배경이 연결됩니다. | 후드와 머리가 더 남지만 옷 경계가 거칩니다. | 후드와 머리가 더 남지만 그림자 쪽 회색 잔여와 거친 경계가 남습니다. | +13,681/-915; +13,378/-915 |
 
-**정답 마스크가 없는 정성 비교입니다.** 이전 대비 alpha 0.5 기준으로 바뀐 픽셀은 shot5 라이브에서 추가 31,525·제거 0개, 전체 격자에서 추가 31,292·제거 0개였고 나머지 11장은 이진 마스크 변화가 0개였습니다. 추가 픽셀은 옷과 배경을 모두 포함하므로 복원율이나 정확도가 아닙니다. 결과와 임계값은 이 사진들을 보며 선택했고 독립 데이터로 검증하지 않았습니다. SCHP는 일부 사례에서 더 나은 시각적 결과를 보이지만 test2처럼 옷을 지우기도 하므로 전체적으로 더 정확하다고 단정할 수 없습니다.
+마지막 열은 전체 이미지에서 alpha 0.5를 기준으로 `+`는 Sapiens person에만, `-`는 SCHP person에만 남은 픽셀 수입니다. 옷뿐 아니라 머리·배경도 포함하며 사진 크기도 달라 정확도나 복원율이 아닙니다. 각 파서와 Main의 비교 및 옷 전용 수치는 CSV에 있습니다.
+
+**실제 사진에는 정답 마스크가 없습니다.** 12장은 독립적인 장면이 아니며 결합 임계값과 감마도 같은 사진을 보며 탐색했습니다. 이전 옷 코드 대비 alpha 0.5 기준 shot5는 라이브에서 추가 31,525·제거 0개, 전체 격자에서 추가 31,292·제거 0개였고 나머지 11장의 이진 마스크는 같았습니다. 추가 픽셀에는 배경도 포함될 수 있습니다. SCHP person은 **이 예시들의 오프라인 비교 기준**으로 더 유용하지만 test2 옷을 자르기도 합니다. Sapiens와 새 HSV 후보도 전체적으로 신뢰할 만하지 않아 앱에 학습 파서나 새 HSV 로직을 추가하지 않았습니다.
 
 ### 적용한 방법과 선택
 
@@ -43,21 +45,54 @@
 
 원본 코드와 변환 모델 카드는 각각 MIT로 표시되어 있지만, 원 학습 데이터와 가중치의 재배포·상업적 사용 권리는 별도로 확인하지 못했습니다. 가중치 두 파일은 약 255 MiB이며 리비전 `7c0028fe34dcd8bd534ffa291a9086cdc856e4a9`, SHA-256 `41c9d6c753a387f794bf3cbd9aed5e20c81a934fdc91731475bd46138937f84c`와 `be931b91c76ed7707b5426abbccee98620a122b777c7cbd1f771a122803666e7`로 고정·검증합니다. 앱의 계획은 추가 학습 분할 모델을 허용하지 않으므로 ONNX Runtime과 Pillow는 `parsing` 선택 의존성으로만 두고 앱에는 연결하지 않았습니다. 한 번씩 실행한 라이브 SCHP 추론·전후처리 중앙값은 약 190 ms였으며 모델 로딩과 결합, 전체 앱 시간은 제외한 참고값입니다.
 
+**오프라인 Sapiens 파싱.** 공식 [Sapiens 0.3B 분할 TorchScript 체크포인트](https://huggingface.co/facebook/sapiens-seg-0.3b-torchscript/tree/18e07d7474a00d30728f22de33325741ce27046f)를 실행했습니다. 파일 크기는 1,358,871,599바이트, 리비전은 `18e07d7474a00d30728f22de33325741ce27046f`, SHA-256은 `735a9a8d63fe8f3f6a4ca3d787de07e69b1f9708ad550e09bb33c9854b7eafbc`입니다. [코드](https://github.com/facebookresearch/sapiens/blob/main/LICENSE)와 모델 카드는 CC BY-NC 4.0으로, 비상업 용도만 허용합니다.
+
+입력은 RGB 1024 × 768이며 평균 `[123.5, 116.5, 103.5]`, 표준편차 `[58.5, 57, 57.5]`로 정규화합니다. apparel·하의·상의 확률(클래스 1·12·22)을 합하고 배경은 클래스 0을 씁니다. 두 파서에 위에서 설명한 같은 Main-alpha 결합을 쓰지만 임계값은 SCHP를 보며 정했고 클래스 정의와 확률 보정도 다를 수 있어 모델만 바꾼 공정한 통제 비교는 아닙니다.
+
+12장과 두 격자에서 전체 프레임의 세 입력을 시험했습니다: [공식 데모 방식 늘이기](docs/evaluation/clothing/research-v2/live/comparison.jpg)([전체 격자](docs/evaluation/clothing/research-v2/full-grid/comparison.jpg)), [비율 보존 검은 패딩](docs/evaluation/clothing/research-letterbox/live/comparison.jpg)([전체 격자](docs/evaluation/clothing/research-letterbox/full-grid/comparison.jpg)), 패딩과 고정 감마 0.55(맨 위 결과). 각 디렉터리에 12행 CSV도 있습니다. 늘이기는 shot5와 test1/2/3/4/8의 옷을 대부분 잃었습니다. 패딩은 shot5와 test3을 복원했지만 test1/2/4의 옷을 대부분 지우고 test5/6에 구멍, test8에 얼룩을 남겼습니다. 같은 사진을 보고 추가한 감마는 패딩만 쓴 경우보다 test1/8의 옷 일부를 되찾았지만 test2/4는 여전히 상의 거의 전체가 사라지고 test5/6에도 큰 구멍이 남습니다. 감마는 모델 입력에만 적용하고 합성은 원본 RGB를 사용합니다. 어떤 변형도 앱에 넣기 적합하지 않았습니다.
+
+Apple M4 Pro, RAM 24 GiB, Python 3.12.13, PyTorch 2.15.0, ONNX Runtime 1.32.0에서 한 번 측정한 패딩 라이브 결과의 추론·전후처리 중앙값은 Sapiens MPS 약 1.6초, SCHP CPU 약 0.18초였습니다. 장치가 다르고 모델 로딩·결합·나머지 앱 시간은 제외된 탐색적 수치입니다. 동일 shot5 입력의 실제 CPU와 MPS Sapiens 옷/배경 확률 최대 차이는 0.000023 이하였고 두 확률의 0.5 판정 차이는 없었습니다.
+
+**HSV·기하·연결성 후보.** 별도의 오프라인 NumPy 가설로 HSV 배경 색을 모델링하고 얼굴 기반 중앙 몸통을 보호한 뒤, 배경 표본과 연결된 유사 색 영역을 얼굴 연결성 정리 전에 제거했습니다. 전체 포즈 추정 논문을 그대로 재현한 것은 아닙니다. [라이브](docs/evaluation/clothing/hsv-probe/live/comparison.jpg)와 [전체 격자](docs/evaluation/clothing/hsv-probe/full-grid/comparison.jpg) 비교 및 CSV에 12장 모두 포함했습니다. 현재 NumPy 대비 alpha 0.5 기준 제거된 픽셀 합은 각각 12,889개와 26,669개지만 정답이 없어 옷과 배경을 구분하는 수치가 아닙니다.
+
+`tests/test_hsv_probe.py`의 정답이 있는 합성 반례에서는 벽과 비슷한 소매 2,150픽셀 중 현재 NumPy가 라이브 2,020개·전체 격자 1,997개를 남긴 반면 후보는 692개·679개만 남겼고, 이 장면에서 배경 제거는 **0개**였습니다. 마스크가 작아진 것을 개선으로 간주하지 않고 후보를 기각했습니다. 앱의 기존 근접 보정은 유지하며 새 후보로 앱 코드를 바꾸지 않았습니다.
+
+### 다른 연구 후보
+
+| 후보 | 접근성·제약과 결정 |
+|---|---|
+| [SCHP](https://github.com/GoGoDuck912/Self-Correction-Human-Parsing) | 고정한 변환 모델을 CPU에서 실행했습니다. 원본 코드와 변환 모델 카드는 MIT로 표시되지만 원 가중치와 학습 데이터 권리는 별도 확인이 필요합니다. 오프라인 비교 전용입니다. |
+| [Sapiens](https://github.com/facebookresearch/sapiens) | 공식 0.3B 모델을 로컬에서 실행했으나 코드·가중치가 CC BY-NC 4.0이고 관찰된 실패 때문에 앱에 채택하지 않았습니다. |
+| [Sapiens2](https://github.com/facebookresearch/sapiens2) | 공식 0.4B 분할과 1B 매팅 가중치는 공개되어 있지만 각각 약 1.63 GB와 6.16 GB가 추가됩니다. [라이선스](https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md)는 생체정보 처리 등 일부 용도를 금지하며 사용 시 약관에 동의하게 됩니다. 증명사진 용도가 해당 제한에 속하는지는 법률 검토가 필요합니다. 다운로드·실행하지 않았습니다. |
+| [Spectrum](https://arxiv.org/abs/2508.06032) | 착용 의류 파싱 논문이지만 확인 당시 논문과 프로젝트 페이지에서 재현 가능한 코드·가중치 다운로드를 찾지 못했고 모델 사용 조건도 확인하지 못했습니다. 실행하지 않았습니다. |
+| [D2FP](https://github.com/cvlab-yongin/D2FP) | 코드는 MIT로 표시되며 [공식 릴리스 가중치](https://github.com/cvlab-yongin/D2FP/releases/tag/weights)는 각각 약 958 MB입니다. 공식 설치에는 Detectron2와 CUDA 확장이 필요하고 Python 디버그 fallback도 그 확장을 import합니다. 이 Mac에는 Detectron2와 CUDA가 없으며 가중치·데이터 권리도 별도 검토가 필요해 실행하지 않았습니다. |
+| [SAM 3](https://github.com/facebookresearch/sam3) | 가중치는 [수동 승인 대상](https://huggingface.co/facebook/sam3)이고 별도 [SAM 라이선스](https://github.com/facebookresearch/sam3/blob/main/LICENSE)를 따릅니다. 공식 경로는 CUDA를 요구하고 체크포인트는 약 3.45 GB입니다. 실행하거나 외부 데모에 사진을 보내지 않았으며, 의류 프롬프트도 대상 인물과의 연결 판정이 필요합니다. |
+| HSV/morphology와 자세·연결성 아이디어 | NumPy 후보와 기존 얼굴 랜드마크 기반 근접 보정으로 시험했으며 해당 논문들의 전체 시스템 재현은 아닙니다. 새 후보는 위 합성 반례 때문에 기각했습니다. |
+
+실행하지 않은 Sapiens2 [분할 `model.safetensors`](https://huggingface.co/facebook/sapiens2-seg-0.4b/tree/449b3c5335e6722bb94990abdd1aa6e612432f22)의 리비전은 `449b3c5335e6722bb94990abdd1aa6e612432f22`, 크기는 1,626,451,404바이트, LFS SHA-256은 `b85fdb50b7d6123a967d5ee4a505e222baff8d2f7ad6bbf353578c1a61dfbac9`입니다. [매팅 `model.safetensors`](https://huggingface.co/facebook/sapiens2-matting-1b/tree/88b79074a58a0e2bb5befc00a237488c43cd94da)는 리비전 `88b79074a58a0e2bb5befc00a237488c43cd94da`, 6,157,412,312바이트, LFS SHA-256 `2a0ea4ea2234e8dbd51e952950d8cedfe3ee2eca9099003784fd2d9cec6bc6e1`입니다. 이는 저장소 메타데이터이며 로컬 다운로드로 검증한 체크섬이 아닙니다.
+
 ### 새 비교 재현
 
-FBA의 비상업 제한을 확인한 뒤 로컬에서 실행합니다. 사진은 전송하지 않고, 모델은 Git에서 제외된 `models/`에 저장됩니다.
+FBA와 Sapiens의 비상업 제한을 확인한 뒤 로컬에서 실행합니다. 사진은 전송하지 않고 모델은 Git에서 제외된 `models/`에 저장됩니다. 아래는 Sapiens에 Apple MPS를 쓰며, MPS가 없으면 `--sapiens-device cpu`를 사용합니다.
 
 ```bash
 uv sync --group dev --extra fba --extra parsing
 uv run python tools/fetch_model.py
 uv run --extra fba python tools/fba_reference.py --accept-noncommercial
 uv run --extra parsing python -m tools.schp_reference --download
-uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --out out/clothing-research/live
-uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --full-grid --out out/clothing-research/full-grid
+uv run --extra fba python -m tools.sapiens_reference --accept-noncommercial
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --out out/clothing-research/stretch/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --full-grid --out out/clothing-research/stretch/full-grid
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --out out/clothing-research/pad/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --full-grid --out out/clothing-research/pad/full-grid
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --sapiens-gamma 0.55 --out out/clothing-research/gamma/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --sapiens-gamma 0.55 --full-grid --out out/clothing-research/gamma/full-grid
+uv run python -m tools.eval_hsv_probe --out out/clothing-research/hsv/live
+uv run python -m tools.eval_hsv_probe --full-grid --out out/clothing-research/hsv/full-grid
 uv run --extra fba --extra parsing pytest -q
 ```
 
-각 평가 명령은 비교 그림 한 장과 12행 CSV를 만듭니다. Main과 SCHP 결합은 Main의 같은 국소 배경 추정과 선형광 합성을 사용하지만, FBA는 추정한 전경과 alpha를 sRGB에서 합성하므로 색상은 완전히 같은 조건이 아닙니다. FBA 자동 트라이맵과 측정의 세부 조건은 아래에 설명합니다. 고정된 Main과 직전 옷 코드의 Git 커밋이 로컬에 있어야 하며, 랜드마크 캐시가 달라지면 결과도 달라질 수 있습니다.
+각 평가 명령은 비교 그림 한 장과 12행 CSV를 만듭니다. HSV 후보에 필요한 랜드마크 캐시가 생성되도록 파서 비교를 먼저 실행합니다. Main과 파서 결합은 Main의 같은 국소 배경 추정과 선형광 합성을 사용하지만, FBA는 추정한 전경과 alpha를 sRGB에서 합성하므로 색상은 완전히 같은 조건이 아닙니다. FBA 자동 트라이맵과 측정의 세부 조건은 아래에 설명합니다. 고정된 Main과 직전 옷 코드의 Git 커밋이 로컬에 있어야 하며, 랜드마크 캐시가 달라지면 결과도 달라질 수 있습니다.
 
 ## 이전 옷 개선 및 FBA 실험: 사진 파일 12개
 

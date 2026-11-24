@@ -186,16 +186,36 @@ def main():
                         help="compare FBA using Main and clothing-mask trimaps")
     parser.add_argument("--schp", action="store_true",
                         help="compare the offline SCHP clothing and whole-person priors")
+    parser.add_argument("--sapiens", action="store_true",
+                        help="compare the offline Sapiens clothing and whole-person priors")
+    parser.add_argument("--sapiens-device", choices=("cpu", "mps", "cuda"), default="cpu")
+    parser.add_argument("--sapiens-layout", choices=("stretch", "letterbox"), default="stretch",
+                        help="official whole-frame stretch or aspect-preserving black padding")
+    parser.add_argument("--sapiens-gamma", type=float, default=1.0,
+                        help="optional fixed gamma applied only to the parser input")
     args = parser.parse_args()
+    if not args.sapiens and (args.sapiens_device != "cpu" or args.sapiens_layout != "stretch"
+                             or args.sapiens_gamma != 1.0):
+        parser.error("Sapiens device, layout, and gamma options require --sapiens.")
     args.out.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     before_module = baseline_module(args.baseline)
-    previous_module = baseline_module(PREVIOUS_CLOTHING) if args.schp else None
-    schp = None
+    previous_module = baseline_module(PREVIOUS_CLOTHING) if args.schp or args.sapiens else None
+    parsers = []
     if args.schp:
         from tools.schp_reference import SCHPReference
 
-        schp = SCHPReference()
+        parsers.append(("schp", "SCHP", SCHPReference()))
+    if args.sapiens:
+        import torch
+        from tools.sapiens_reference import SapiensReference
+
+        torch.set_num_threads(4)
+        name = "Sapiens pad" if args.sapiens_layout == "letterbox" else "Sapiens"
+        if args.sapiens_gamma != 1.0:
+            name += f" gamma {args.sapiens_gamma:g}"
+        parsers.append(("sapiens", name, SapiensReference(
+            device=args.sapiens_device, layout=args.sapiens_layout, gamma=args.sapiens_gamma)))
     fba = None
     if args.fba:
         import torch
@@ -226,16 +246,18 @@ def main():
             before, before_ms = process(before_module, rgb, lm, not args.full_grid)
             after, after_ms = process(matting, rgb, lm, not args.full_grid)
             previous = None
-            garment_alpha = person_alpha = None
-            if schp is not None:
+            parsing_results = {}
+            if parsers:
                 from tools.schp_reference import combine_with_main
 
                 previous, previous_ms = process(previous_module, rgb, lm, not args.full_grid)
-                start = time.perf_counter()
-                clothing_probability, background_probability = schp.predict(rgb)
-                schp_ms = 1000 * (time.perf_counter() - start)
-                garment_alpha, person_alpha = combine_with_main(
-                    before, lm, clothing_probability, background_probability)
+                for key, _, model in parsers:
+                    start = time.perf_counter()
+                    clothing_probability, background_probability = model.predict(rgb)
+                    parsing_ms = 1000 * (time.perf_counter() - start)
+                    garment_alpha, person_alpha = combine_with_main(
+                        before, lm, clothing_probability, background_probability)
+                    parsing_results[key] = (garment_alpha, person_alpha, parsing_ms)
             row = {
                 "photo": name, "baseline": args.baseline, "mode": "full-grid" if args.full_grid else "live",
                 "width": rgb.shape[1], "height": rgb.shape[0],
@@ -248,7 +270,7 @@ def main():
                 "clothing_background_samples": after.stats["matting"]["clothing_background_samples"],
                 "before_ms": before_ms, "after_ms": after_ms,
             }
-            if schp is not None:
+            if parsers:
                 row.update({
                     "previous_clothing": PREVIOUS_CLOTHING,
                     "previous_ms": previous_ms,
@@ -257,12 +279,24 @@ def main():
                     "clothing_used_samples": after.stats["matting"]["clothing_used_samples"],
                     "crop_vs_previous_added": int(((after.alpha > .5) & (previous.alpha <= .5)).sum()),
                     "crop_vs_previous_removed": int(((previous.alpha > .5) & (after.alpha <= .5)).sum()),
-                    "schp_ms": schp_ms,
-                    "schp_clothing_vs_main_added": int(((garment_alpha > .5) & (before.alpha <= .5)).sum()),
-                    "schp_clothing_vs_main_removed": int(((before.alpha > .5) & (garment_alpha <= .5)).sum()),
-                    "schp_person_vs_main_added": int(((person_alpha > .5) & (before.alpha <= .5)).sum()),
-                    "schp_person_vs_main_removed": int(((before.alpha > .5) & (person_alpha <= .5)).sum()),
                 })
+                for key, _, _ in parsers:
+                    garment_alpha, person_alpha, parsing_ms = parsing_results[key]
+                    row.update({
+                        f"{key}_ms": parsing_ms,
+                        f"{key}_clothing_vs_main_added": int(((garment_alpha > .5) & (before.alpha <= .5)).sum()),
+                        f"{key}_clothing_vs_main_removed": int(((before.alpha > .5) & (garment_alpha <= .5)).sum()),
+                        f"{key}_person_vs_main_added": int(((person_alpha > .5) & (before.alpha <= .5)).sum()),
+                        f"{key}_person_vs_main_removed": int(((before.alpha > .5) & (person_alpha <= .5)).sum()),
+                    })
+                if "schp" in parsing_results and "sapiens" in parsing_results:
+                    for index, variant in enumerate(("clothing", "person")):
+                        schp_alpha = parsing_results["schp"][index]
+                        sapiens_alpha = parsing_results["sapiens"][index]
+                        row[f"sapiens_{variant}_vs_schp_added"] = int(
+                            ((sapiens_alpha > .5) & (schp_alpha <= .5)).sum())
+                        row[f"sapiens_{variant}_vs_schp_removed"] = int(
+                            ((schp_alpha > .5) & (sapiens_alpha <= .5)).sum())
             if fba is not None:
                 trimap = fba_trimap(rgb, lm, before)
                 start = time.perf_counter()
@@ -291,7 +325,7 @@ def main():
                     "combined_vs_fba_mean_abs_alpha_difference": float(np.abs(combined_alpha - fba_alpha).mean()),
                     "combined_tiles": combined_tiles, "combined_ms": combined_ms,
                 })
-                if schp is None:
+                if not parsers:
                     guarded_trimap = guarded_fba_trimap(rgb, trimap, improved_trimap, fba_alpha)
                     start = time.perf_counter()
                     guarded, guarded_tiles = fba.process(rgb, guarded_trimap, tile_size=1024, overlap=96)
@@ -310,18 +344,19 @@ def main():
                                    fba_composite(combined), fba_composite(guarded)))
                     fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha,
                                        guarded_trimap, guarded_alpha))
-            elif schp is None:
+            elif not parsers:
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
                                color.encode_u8(after.output_frame), before.alpha, after.alpha))
-            if schp is not None:
+            if parsers:
                 fba_images = (fba_composite(prediction),) if fba is not None else ()
                 fba_combined = (fba_composite(combined),) if fba is not None else ()
+                parsing_images = tuple(
+                    composite_main_alpha(before_module, before, lm, alpha, not args.full_grid)
+                    for key, _, _ in parsers for alpha in parsing_results[key][:2])
                 panels.append((
                     name, rgb, color.encode_u8(before.output_frame), *fba_images,
                     color.encode_u8(previous.output_frame), color.encode_u8(after.output_frame),
-                    *fba_combined,
-                    composite_main_alpha(before_module, before, lm, garment_alpha, not args.full_grid),
-                    composite_main_alpha(before_module, before, lm, person_alpha, not args.full_grid)))
+                    *fba_combined, *parsing_images))
             rows.append(row)
             if args.sample_figure and name in ("shot2", "test5"):
                 sample_panels[name] = sample_views(rgb, lm, after, not args.full_grid)
@@ -334,14 +369,15 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    if schp is not None:
+    if parsers:
         titles = ["Original", "Main"]
         if fba is not None:
             titles.append("FBA")
         titles += ["Previous clothing", "Clothing (NumPy)"]
         if fba is not None:
             titles.append("NumPy + FBA")
-        titles += ["Main + SCHP clothing", "Main + SCHP person"]
+        for _, name, _ in parsers:
+            titles += [f"Main + {name}\nclothing", f"Main + {name}\nperson"]
         write_sheets(panels, titles, "comparison", args.out)
     elif fba is None:
         write_sheets(panels, ["Original", "Main", "Clothing improvement",

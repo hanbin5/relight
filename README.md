@@ -2,34 +2,36 @@
 
 # Module B Clothing-Recovery Experiments
 
-![Original and clothing-recovery results for the representative photos](docs/evaluation/clothing/research/live/comparison.jpg)
+![Original and clothing-recovery results for the representative photos](docs/evaluation/clothing/research-gamma/live/comparison.jpg)
 
 If the existing background-separation pipeline is unfamiliar, first read the [Module B matting overview](https://github.com/hanbin5/relight/blob/module-b/matting/README.md). This report does not repeat that pipeline; it describes the attempts to recover missing clothing and their results. The selected change is in the app's `idphoto/matting.py`, not just an offline experiment.
 
-The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model. SCHP and FBA are offline experiments, not app features; FBA's weights are noncommercial.
+The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model. SCHP, Sapiens and FBA are offline experiments, not app features; Sapiens and FBA have noncommercial restrictions.
 
-## New Experiment: All 12 Photos
+## Latest Experiment: All 12 Photos
 
-The columns above are `Original / Main / FBA / Previous clothing / Clothing (NumPy) / NumPy + FBA / Main + SCHP clothing / Main + SCHP person`. `Previous clothing` is the prior app implementation, `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`; `Clothing (NumPy)` is the current app implementation including the close-up fallback. `FBA` uses a trimap made from Main alpha, while `NumPy + FBA` uses one made by **the same rules from the current clothing alpha**. Both receive the original photo. The SCHP results combine parsing with **Main alpha**, not with FBA: SCHP clothing uses the upper-clothes, dress, coat, jumpsuit, and scarf classes; SCHP person uses the whole person, including hair.
+`Previous clothing` is app code `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`; `Clothing (NumPy)` includes the current close-up fallback. `FBA` uses a trimap from Main alpha, and `NumPy + FBA` uses one made **by the same rules from the current clothing alpha**. Both receive the original photo. SCHP and Sapiens instead combine their predictions with **Main alpha**, not FBA: `clothing` uses garment classes, and `person` includes all predicted person parts. Here Sapiens receives aspect-preserving black padding and a fixed gamma of 0.55 on its input only.
 
-All 12 photos were evaluated on the same 640 px-wide inputs and landmarks in live mode (`s=2`) and on the [full grid (`s=1`)](docs/evaluation/clothing/research/full-grid/comparison.jpg). The table and [live CSV](docs/evaluation/clothing/research/live/measurements.csv) and [full-grid CSV](docs/evaluation/clothing/research/full-grid/measurements.csv) retain all 12 photos. Because `shot2`–`shot4` depict similar scenes, the figure shows only `shot2` as their representative. Left and right below are as viewed in the image.
+All 12 photos use the same 640 px-wide inputs and landmarks in live mode (`s=2`) and on the [full grid (`s=1`)](docs/evaluation/clothing/research-gamma/full-grid/comparison.jpg). The [live CSV](docs/evaluation/clothing/research-gamma/live/measurements.csv) and [full-grid CSV](docs/evaluation/clothing/research-gamma/full-grid/measurements.csv) retain all 12. The figure shows `shot2` as the representative of the similar `shot2`–`shot4` scene. Left and right are as viewed in the photo.
 
-| Photo | Current NumPy clothing versus previous | SCHP combination |
-|---|---|---|
-| shot2 | The live jacket remains, but its edge is rough and the full-grid result fragments. | More jacket remains, and person also restores hair. |
-| shot3 | The binary mask is unchanged; part of the left jacket is still missing. | More jacket remains, but the left edge is partly translucent depending on the mode. |
-| shot4 | The binary mask is unchanged, with the right-side background object still present. | More jacket remains and the right-side object is reduced, but the edge is imperfect. |
-| shot5 | Both sides of the close-up jacket return where previously there were no samples; the right shoulder is rough. | Both combinations retain more jacket; person also restores clipped hair. |
-| test1 | The binary mask is unchanged, with dark room objects and holes in the top. | Side background is reduced and the top is more connected, but the person boundary is imperfect. |
-| test2 | The binary mask is unchanged, with dark objects on both sides. | Person improves hair and background, but right-shoulder and sleeve loss and residual fragments are conspicuous. |
-| test3 | The binary mask is unchanged, with a neck notch and background at the right. | Background is reduced and the top is more connected; person also retains more hair. |
-| test4 | The binary mask is unchanged, with a blue object and dark background. | Objects around the clothing are reduced; person also retains more hair. |
-| test5 | The binary mask is unchanged; the right white shoulder and left wall strip remain. | The left wall strip is reduced, but the clothing and neck boundaries are imperfect. |
-| test6 | The binary mask is unchanged, with wall leakage behind the shoulder. | The wall is reduced, but a white hole appears in the bright foreground at the bottom left. |
-| test8 | The binary mask is unchanged, with collar notches and blocky edges. | The top is more connected, but gray residue remains at the right sleeve. |
-| test9 | The binary mask is unchanged, with missing hoodie, attached background, and clipped hair. | More hoodie remains and person restores hair, but the lower clothing boundary is rough. |
+| Photo | NumPy clothing and background | SCHP person | Sapiens pad + gamma person | Sapiens vs SCHP pixels: live; full grid |
+|---|---|---|---|---|
+| shot2 | Jacket remains, but its edge is rough and fragments on the full grid. | More jacket and hair remain. | Similar jacket and hair; edges are not perfect. | +343/-690; +382/-703 |
+| shot3 | Left jacket is partly missing. | More jacket remains; the left edge can be translucent. | Jacket and hair remain, with an imperfect edge. | +444/-644; +453/-641 |
+| shot4 | The right-side background object remains. | More jacket remains and the object is reduced. | Jacket remains and the object is reduced, with a rough edge. | +446/-629; +447/-630 |
+| shot5 | Both sides of the close-up jacket return; the right shoulder is rough. | Jacket and clipped hair return. | Jacket and hair return, but their edges remain imperfect. | +1,259/-750; +1,259/-750 |
+| test1 | Dark room objects and holes in the top remain. | Side background is reduced and the top is more connected. | Gamma restores much of the top versus padding alone, but conspicuous holes and clipped hair remain. | +1,382/-4,094; +1,458/-3,964 |
+| test2 | Dark objects remain on both sides. | Hair and background improve, but the right shoulder and sleeve are cut. | Almost the entire top is removed despite gamma. | +0/-54,200; +0/-54,202 |
+| test3 | A neck notch and background at the right remain. | Background is reduced; top and hair are more complete. | The gray top remains, but much hair is still clipped. | +626/-10,381; +627/-8,780 |
+| test4 | A blue object and dark background remain. | Objects near the top are reduced and more hair remains. | Almost the entire top is removed. | +0/-56,237; +0/-56,057 |
+| test5 | The right white shoulder and a left wall strip remain. | The wall strip is reduced; clothing and neck edges are imperfect. | The wall is reduced, but a conspicuous hole cuts through the printed shirt. | +6,993/-22,509; +6,792/-22,533 |
+| test6 | Wall leakage behind the shoulder remains. | The wall is reduced, but a bright foreground hole remains. | The wall is reduced, but large parts of the shirt and lower foreground are cut. | +10,591/-41,028; +10,227/-41,082 |
+| test8 | Collar notches and blocky edges remain. | The top is more connected, with residue at the right sleeve. | Gamma restores part of the top versus padding alone, but leaves speckled holes. | +4,898/-4,278; +4,871/-4,184 |
+| test9 | Hoodie and hair are clipped, with attached background. | More hoodie and hair remain, but the clothing edge is rough. | More hoodie and hair remain, with gray shadow-side residue and a rough edge. | +13,681/-915; +13,378/-915 |
 
-**These are qualitative comparisons without ground-truth masks.** Relative to previous clothing at alpha 0.5, shot5 adds 31,525 pixels and removes none in live mode, and adds 31,292 and removes none on the full grid; the other 11 binary masks are unchanged. Added pixels include clothing and background, so they are not recovery or accuracy measurements. The methods and thresholds were chosen after inspecting these same photos, with no independent validation. SCHP looks better in some examples but can also remove clothing, as in test2; we cannot claim it is more accurate overall.
+The last column counts whole-image pixels crossing alpha 0.5: `+` is above 0.5 only in Sapiens person, and `-` only in SCHP person. It includes hair, clothing and background, not just clothing; counts are not accuracy or recovery and image sizes differ. All parser-versus-Main and clothing-only counts are in the CSVs.
+
+**There are no ground-truth masks for these photos.** The 12 photos are not independent scenes, and both fusion thresholds and gamma were explored on the same set. Relative to previous clothing at alpha 0.5, shot5 adds 31,525 pixels and removes none in live mode and adds 31,292 and removes none on the full grid; the other 11 binary masks are unchanged. Added pixels may include background. SCHP person is the more useful **offline reference for these examples**, but it also cuts test2 clothing; Sapiens and the new HSV proposal are not reliable overall. No pretrained parser or new HSV logic was added to the app.
 
 ### Methods and Decisions
 
@@ -43,21 +45,54 @@ Both combinations attenuate Main alpha below the chin as SCHP background probabi
 
 The original source and converted model card are each labeled MIT, but redistribution and commercial rights for the original training data and weights have not been independently established. The two weight files total about 255 MiB and are pinned to revision `7c0028fe34dcd8bd534ffa291a9086cdc856e4a9`, with SHA-256 `41c9d6c753a387f794bf3cbd9aed5e20c81a934fdc91731475bd46138937f84c` and `be931b91c76ed7707b5426abbccee98620a122b777c7cbd1f771a122803666e7`. The project plan does not permit an additional pretrained segmentation model in the app, so ONNX Runtime and Pillow are only a `parsing` optional dependency and SCHP is not wired into the app. A single live run had a median SCHP inference plus pre/postprocessing time of about 190 ms; this excludes model loading, fusion, and the rest of the app.
 
+**Offline Sapiens parsing.** We ran the official [Sapiens 0.3B segmentation TorchScript checkpoint](https://huggingface.co/facebook/sapiens-seg-0.3b-torchscript/tree/18e07d7474a00d30728f22de33325741ce27046f). Its 1,358,871,599-byte file is pinned to revision `18e07d7474a00d30728f22de33325741ce27046f` and SHA-256 `735a9a8d63fe8f3f6a4ca3d787de07e69b1f9708ad550e09bb33c9854b7eafbc`. The [code](https://github.com/facebookresearch/sapiens/blob/main/LICENSE) and model card specify CC BY-NC 4.0: noncommercial use only.
+
+The model takes RGB at 1024 × 768, normalized with mean `[123.5, 116.5, 103.5]` and standard deviation `[58.5, 57, 57.5]`. We sum its apparel, lower-clothing and upper-clothing probabilities (classes 1, 12, 22) and use class 0 for background. The same Main-alpha fusion described above is used for both parsers, although its thresholds were tuned on SCHP and their probabilities and class definitions need not be calibrated alike; this is not a controlled comparison of models alone.
+
+We tested three whole-frame inputs on all 12 photos and both grids: [official-demo stretch](docs/evaluation/clothing/research-v2/live/comparison.jpg) ([full grid](docs/evaluation/clothing/research-v2/full-grid/comparison.jpg)), [aspect-preserving black padding](docs/evaluation/clothing/research-letterbox/live/comparison.jpg) ([full grid](docs/evaluation/clothing/research-letterbox/full-grid/comparison.jpg)), and padding plus fixed gamma 0.55 (the top result). Each directory includes its 12-row CSV. Stretch loses most of shot5 and test1/2/3/4/8 clothing. Padding restores shot5 and test3 but still largely removes test1/2/4, makes holes in test5/6 and leaves speckles in test8. Gamma was explored after viewing these same photos: it restores parts of test1/8 versus padding, yet test2/4 still lose almost the entire top and test5/6 have large holes. Gamma changes only the parser input; compositing still uses the original RGB. No variant is suitable to add to the app.
+
+On an Apple M4 Pro with 24 GiB RAM, Python 3.12.13, PyTorch 2.15.0 and ONNX Runtime 1.32.0, one padding run had median Sapiens MPS inference plus pre/postprocessing of about 1.6 s per live image versus about 0.18 s for SCHP on CPU. The devices differ; model loading, fusion and the rest of the app are excluded. On the same shot5 input, actual CPU and MPS Sapiens clothing/background probabilities differed by at most 0.000023 and had no threshold-0.5 disagreements. These are exploratory timings, not an app benchmark.
+
+**HSV, geometry and connectivity probe.** A separate offline NumPy hypothesis models HSV background colors, protects a face-derived central torso, and removes background-like regions connected to background seeds before face-connectivity cleanup. It is not a reproduction of a full pose-estimation paper. The [live](docs/evaluation/clothing/hsv-probe/live/comparison.jpg) and [full-grid](docs/evaluation/clothing/hsv-probe/full-grid/comparison.jpg) comparisons and CSVs cover all 12 photos. At alpha 0.5 the probe removed 12,889 and 26,669 pixels respectively versus current NumPy; without labels, those totals do not distinguish clothing from background.
+
+The labeled synthetic counterexample in `tests/test_hsv_probe.py` exposes the tradeoff: of 2,150 known sleeve pixels resembling the wall, current NumPy retains 2,020 live and 1,997 full-grid, while the probe retains only 692 and 679; it removes **zero** background pixels in that scene. We rejected this candidate rather than treating a smaller mask as an improvement. The existing app close-up fallback remains; the new probe changes no app code.
+
+### Other Research Candidates
+
+| Candidate | Availability, constraints and decision |
+|---|---|
+| [SCHP](https://github.com/GoGoDuck912/Self-Correction-Human-Parsing) | The pinned converted model ran locally on CPU; source and model card are labeled MIT, but original weight and training-data rights require separate verification. Offline comparison only. |
+| [Sapiens](https://github.com/facebookresearch/sapiens) | The official 0.3B model ran locally, but its code and weights are CC BY-NC 4.0 and the observed failures preclude app adoption. |
+| [Sapiens2](https://github.com/facebookresearch/sapiens2) | Official 0.4B segmentation and 1B matting weights are public but add about 1.63 GB and 6.16 GB. Its [license](https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md) forbids biometric processing, among other uses, and use accepts the agreement. Whether an ID-photo use falls within that restriction requires legal review. We did not download or run it. |
+| [Spectrum](https://arxiv.org/abs/2508.06032) | The paper describes worn-clothing parsing, but its paper and project page did not expose a reproducible code/weight download when checked; model-use terms could not be established. Not run. |
+| [D2FP](https://github.com/cvlab-yongin/D2FP) | Code is labeled MIT and [official release weights](https://github.com/cvlab-yongin/D2FP/releases/tag/weights) are about 958 MB each. The setup needs Detectron2 and a CUDA extension; the Python debug fallback still imports that extension. This Mac has neither Detectron2 nor CUDA, and weight/data rights need separate review. Not run. |
+| [SAM 3](https://github.com/facebookresearch/sam3) | Weights are [manually gated](https://huggingface.co/facebook/sam3) and under the custom [SAM license](https://github.com/facebookresearch/sam3/blob/main/LICENSE); the official path expects CUDA and the checkpoint is about 3.45 GB. Not run or sent to an external demo; a clothing prompt also requires subject association. |
+| HSV/morphology and pose/connection ideas | Tested as the NumPy probe and the existing face-landmark close-up fallback, not as the cited papers' complete systems. The new probe was rejected on the labeled counterexample above. |
+
+For traceability, the unrun Sapiens2 [segmentation `model.safetensors`](https://huggingface.co/facebook/sapiens2-seg-0.4b/tree/449b3c5335e6722bb94990abdd1aa6e612432f22) has revision `449b3c5335e6722bb94990abdd1aa6e612432f22`, 1,626,451,404 bytes and LFS SHA-256 `b85fdb50b7d6123a967d5ee4a505e222baff8d2f7ad6bbf353578c1a61dfbac9`. The unrun [matting `model.safetensors`](https://huggingface.co/facebook/sapiens2-matting-1b/tree/88b79074a58a0e2bb5befc00a237488c43cd94da) has revision `88b79074a58a0e2bb5befc00a237488c43cd94da`, 6,157,412,312 bytes and LFS SHA-256 `2a0ea4ea2234e8dbd51e952950d8cedfe3ee2eca9099003784fd2d9cec6bc6e1`. These are repository metadata, not checksums verified from local downloads.
+
 ### Reproduce the New Comparison
 
-After reviewing FBA's noncommercial restriction, run locally. Photos are not transmitted, and models are stored under Git-ignored `models/`.
+After reviewing the FBA and Sapiens noncommercial restrictions, run locally. Photos are not transmitted, and models are stored under Git-ignored `models/`. The commands below use Apple MPS for Sapiens; use `--sapiens-device cpu` where MPS is unavailable.
 
 ```bash
 uv sync --group dev --extra fba --extra parsing
 uv run python tools/fetch_model.py
 uv run --extra fba python tools/fba_reference.py --accept-noncommercial
 uv run --extra parsing python -m tools.schp_reference --download
-uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --out out/clothing-research/live
-uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --full-grid --out out/clothing-research/full-grid
+uv run --extra fba python -m tools.sapiens_reference --accept-noncommercial
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --out out/clothing-research/stretch/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --full-grid --out out/clothing-research/stretch/full-grid
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --out out/clothing-research/pad/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --full-grid --out out/clothing-research/pad/full-grid
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --sapiens-gamma 0.55 --out out/clothing-research/gamma/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --sapiens --sapiens-device mps --sapiens-layout letterbox --sapiens-gamma 0.55 --full-grid --out out/clothing-research/gamma/full-grid
+uv run python -m tools.eval_hsv_probe --out out/clothing-research/hsv/live
+uv run python -m tools.eval_hsv_probe --full-grid --out out/clothing-research/hsv/full-grid
 uv run --extra fba --extra parsing pytest -q
 ```
 
-Each evaluation writes one comparison figure and a 12-row CSV. Main and the SCHP combinations use Main's same local-background estimate and linear-light composite; FBA composites its estimated foreground and alpha in sRGB, so colors are not strictly like-for-like. FBA's automatic trimap and measurement details are described below. The fixed Main and previous-clothing Git commits must be available locally; results can change if landmarks are redetected rather than reused from cache.
+Each evaluation writes one comparison figure and a 12-row CSV. Run a parser comparison before the HSV probe so its landmark cache exists. Main and the parser combinations use Main's same local-background estimate and linear-light composite; FBA composites its estimated foreground and alpha in sRGB, so colors are not strictly like-for-like. FBA's automatic trimap and measurement details are described below. The fixed Main and previous-clothing Git commits must be available locally; results can change if landmarks are redetected rather than reused from cache.
 
 ## Earlier Clothing and FBA Experiment: 12 Photo Files
 
