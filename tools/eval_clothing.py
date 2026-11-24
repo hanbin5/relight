@@ -20,13 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "e96bb08cb678634207ea3aa45f086152c4c96f11"
 NAMES = ["shot2", "shot3", "shot4", "shot5", "test1", "test2",
          "test3", "test4", "test5", "test6", "test8", "test9"]
-SHEET_GROUPS = (
-    ("shot2", "shot5"),
-    ("test1", "test2", "test3", "test4"),
-    ("test5", "test6", "test8", "test9"),
-)
+SHEET_NAMES = tuple(name for name in NAMES if name not in ("shot3", "shot4"))
 FBA_BAND = 0.5
 FBA_EROSION = 0.06
+FBA_CONFIRM_ALPHA = 0.75
 
 
 def baseline_module(ref):
@@ -81,6 +78,21 @@ def fba_composite(prediction):
     return np.rint(np.clip(alpha * prediction[..., 1:4] + 1 - alpha, 0, 1) * 255).astype(np.uint8)
 
 
+def guarded_fba_trimap(rgb, main_trimap, clothing_trimap, reference_alpha):
+    from tools.fba_reference import validate_trimap
+
+    validate_trimap(rgb, main_trimap)
+    validate_trimap(rgb, clothing_trimap)
+    if (reference_alpha.shape != rgb.shape[:2] or not np.isfinite(reference_alpha).all()
+            or reference_alpha.min() < 0 or reference_alpha.max() > 1):
+        raise ValueError("The reference FBA alpha must match the frame and be finite in [0, 1].")
+    guarded = main_trimap.copy()
+    promote = ((main_trimap == 128) & (clothing_trimap == 255)
+               & (reference_alpha > FBA_CONFIRM_ALPHA))
+    guarded[promote] = 255
+    return guarded
+
+
 def sample_views(rgb, lm, ctx, fast):
     h, w = rgb.shape[:2]
     s = 2 if fast else 1
@@ -119,22 +131,22 @@ def write_sheets(items, titles, prefix, out):
     import matplotlib.pyplot as plt
 
     panels = {name: images for name, *images in items}
-    for page, names in enumerate(SHEET_GROUPS, start=1):
-        fig, axes = plt.subplots(
-            len(names), len(titles), figsize=(3 * len(titles), 2.5 * len(names)),
-            layout="constrained", squeeze=False)
-        for r, name in enumerate(names):
-            for c, image in enumerate(panels[name]):
-                vmax = 1 if image.ndim == 2 and np.issubdtype(image.dtype, np.floating) else 255
-                axes[r, c].imshow(image, cmap="gray", vmin=0, vmax=vmax)
-                axes[r, c].set_xticks([])
-                axes[r, c].set_yticks([])
-                if r == 0:
-                    axes[r, c].set_title(titles[c], fontsize=10)
-                if c == 0:
-                    axes[r, c].set_ylabel(name)
-        fig.savefig(out / f"{prefix}-{page}.jpg", dpi=130)
-        plt.close(fig)
+    fig, axes = plt.subplots(
+        len(SHEET_NAMES), len(titles),
+        figsize=(3 * len(titles), 2.5 * len(SHEET_NAMES)),
+        layout="constrained", squeeze=False)
+    for r, name in enumerate(SHEET_NAMES):
+        for c, image in enumerate(panels[name]):
+            vmax = 1 if image.ndim == 2 and np.issubdtype(image.dtype, np.floating) else 255
+            axes[r, c].imshow(image, cmap="gray", vmin=0, vmax=vmax)
+            axes[r, c].set_xticks([])
+            axes[r, c].set_yticks([])
+            if r == 0:
+                axes[r, c].set_title(titles[c], fontsize=10)
+            if c == 0:
+                axes[r, c].set_ylabel(name)
+    fig.savefig(out / f"{prefix}.jpg", dpi=130)
+    plt.close(fig)
 
 
 def main():
@@ -204,6 +216,11 @@ def main():
                 combined, combined_tiles = fba.process(rgb, improved_trimap, tile_size=1024, overlap=96)
                 combined_ms = 1000 * (time.perf_counter() - start)
                 combined_alpha = combined[..., 0]
+                guarded_trimap = guarded_fba_trimap(rgb, trimap, improved_trimap, fba_alpha)
+                start = time.perf_counter()
+                guarded, guarded_tiles = fba.process(rgb, guarded_trimap, tile_size=1024, overlap=96)
+                guarded_ms = 1000 * (time.perf_counter() - start)
+                guarded_alpha = guarded[..., 0]
                 row.update({
                     "fba_trimap_foreground": int((trimap == 255).sum()),
                     "fba_trimap_background": int((trimap == 0).sum()),
@@ -218,11 +235,18 @@ def main():
                     "combined_vs_fba_removed_pixels": int(((fba_alpha > .5) & (combined_alpha <= .5)).sum()),
                     "combined_vs_fba_mean_abs_alpha_difference": float(np.abs(combined_alpha - fba_alpha).mean()),
                     "combined_tiles": combined_tiles, "combined_ms": combined_ms,
+                    "guarded_promoted_foreground": int(((guarded_trimap == 255) & (trimap == 128)).sum()),
+                    "guarded_vs_fba_added_pixels": int(((guarded_alpha > .5) & (fba_alpha <= .5)).sum()),
+                    "guarded_vs_fba_removed_pixels": int(((fba_alpha > .5) & (guarded_alpha <= .5)).sum()),
+                    "guarded_vs_combined_added_pixels": int(((guarded_alpha > .5) & (combined_alpha <= .5)).sum()),
+                    "guarded_vs_combined_removed_pixels": int(((combined_alpha > .5) & (guarded_alpha <= .5)).sum()),
+                    "guarded_tiles": guarded_tiles, "guarded_ms": guarded_ms,
                 })
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
                                fba_composite(prediction), color.encode_u8(after.output_frame),
-                               fba_composite(combined)))
-                fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha))
+                               fba_composite(combined), fba_composite(guarded)))
+                fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha,
+                                   guarded_trimap, guarded_alpha))
             else:
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
                                color.encode_u8(after.output_frame), before.alpha, after.alpha))
@@ -243,10 +267,11 @@ def main():
                               "Main alpha", "Clothing improvement alpha"], "comparison", args.out)
     else:
         write_sheets(panels, ["Original", "Main", "FBA", "Clothing improvement",
-                              "Clothing improvement + FBA"],
+                              "Clothing improvement + FBA", "Guarded FBA"],
                      "comparison", args.out)
         write_sheets(fba_panels, ["Original", "Main trimap", "FBA alpha",
-                                  "Clothing trimap", "Clothing + FBA alpha"], "trimap", args.out)
+                                  "Clothing trimap", "Clothing + FBA alpha",
+                                  "Guarded trimap", "Guarded FBA alpha"], "trimap", args.out)
     if args.sample_figure:
         import matplotlib.pyplot as plt
 

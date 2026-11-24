@@ -120,8 +120,8 @@ def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
     assert np.array_equal(np.any(old_view != guarded_view, axis=2), border & guard)
 
 
-@pytest.mark.parametrize("columns", [3, 4, 5])
-def test_clothing_sheets_show_representative_jacket_and_keep_other_photos(
+@pytest.mark.parametrize("columns", [3, 5, 6, 7])
+def test_clothing_sheet_shows_representative_jacket_and_other_photos_together(
         tmp_path, monkeypatch, columns):
     from matplotlib.figure import Figure
     from tools.eval_clothing import write_sheets
@@ -144,14 +144,13 @@ def test_clothing_sheets_show_representative_jacket_and_keep_other_photos(
 
     monkeypatch.setattr(Figure, "savefig", capture)
     write_sheets(panels, [f"Column {c}" for c in range(columns)], "comparison", tmp_path)
-    expected_groups = (("shot2", "shot5"), ("test1", "test2", "test3", "test4"),
-                       ("test5", "test6", "test8", "test9"))
+    expected_names = ("shot2", "shot5", "test1", "test2", "test3", "test4",
+                      "test5", "test6", "test8", "test9")
     assert saved == {
-        f"comparison-{page}.jpg": [
+        "comparison.jpg": [
             (name, [names.index(name) * 10 + c for c in range(columns)])
-            for name in group
+            for name in expected_names
         ]
-        for page, group in enumerate(expected_groups, start=1)
     }
 
 
@@ -182,6 +181,21 @@ def test_fba_trimap_keeps_a_wide_unknown_band_around_the_whole_person():
     alpha[0, 0] = np.nan
     with pytest.raises(ValueError, match="finite"):
         fba_trimap(rgb, lm, before)
+
+
+def test_guarded_fba_trimap_requires_agreement_and_preserves_known_regions():
+    from tools.eval_clothing import guarded_fba_trimap
+
+    rgb = np.zeros((2, 4, 3), np.uint8)
+    main = np.array([[0, 128, 128, 128], [255, 0, 128, 255]], np.uint8)
+    clothing = np.array([[255, 255, 255, 128], [255, 0, 0, 255]], np.uint8)
+    alpha = np.array([[1, 0.76, 0.75, 0.99], [1, 0, 0.99, 1]], np.float32)
+    actual = guarded_fba_trimap(rgb, main, clothing, alpha)
+    np.testing.assert_array_equal(actual, [[0, 255, 128, 128], [255, 0, 128, 255]])
+    assert main[0, 1] == 128
+    alpha[0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        guarded_fba_trimap(rgb, main, clothing, alpha)
 
 
 @pytest.mark.parametrize("changed", [False, True], ids=["unchanged-mask", "added-clothing"])
@@ -241,12 +255,14 @@ def test_fba_comparison_uses_each_result_as_its_own_trimap_source(
 
     eval_clothing.main()
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     for call, source in zip(calls, (before, after)):
         np.testing.assert_array_equal(call[0], rgb)
         np.testing.assert_array_equal(call[1], eval_clothing.fba_trimap(rgb, lm, source))
         assert call[3:] == (1024, 96)
     assert np.any(calls[0][1] != calls[1][1]) == changed
+    np.testing.assert_array_equal(
+        calls[2][1], eval_clothing.guarded_fba_trimap(rgb, calls[0][1], calls[1][1], calls[0][2][..., 0]))
     base_alpha, combined_alpha = calls[0][2][..., 0], calls[1][2][..., 0]
     with (out / "measurements.csv").open(newline="") as stream:
         row, = csv.DictReader(stream)
@@ -256,12 +272,18 @@ def test_fba_comparison_uses_each_result_as_its_own_trimap_source(
     assert float(row["combined_vs_fba_mean_abs_alpha_difference"]) == pytest.approx(
         float(np.abs(combined_alpha - base_alpha).mean()))
     assert (int(row["combined_vs_fba_added_pixels"]) > 0) == changed
+    guarded_alpha = calls[2][2][..., 0]
+    assert int(row["guarded_promoted_foreground"]) == int(((calls[2][1] == 255) & (calls[0][1] == 128)).sum())
+    assert int(row["guarded_vs_fba_added_pixels"]) == int(((guarded_alpha > .5) & (base_alpha <= .5)).sum())
     comparison, titles = sheets["comparison"]
-    assert titles[-1] == "Clothing improvement + FBA"
-    np.testing.assert_array_equal(comparison[0][-1], eval_clothing.fba_composite(calls[1][2]))
+    assert titles[-2:] == ["Clothing improvement + FBA", "Guarded FBA"]
+    np.testing.assert_array_equal(comparison[0][-2], eval_clothing.fba_composite(calls[1][2]))
+    np.testing.assert_array_equal(comparison[0][-1], eval_clothing.fba_composite(calls[2][2]))
     trimap_panels, _ = sheets["trimap"]
-    np.testing.assert_array_equal(trimap_panels[0][-2], calls[1][1])
-    np.testing.assert_array_equal(trimap_panels[0][-1], combined_alpha)
+    np.testing.assert_array_equal(trimap_panels[0][-4], calls[1][1])
+    np.testing.assert_array_equal(trimap_panels[0][-3], combined_alpha)
+    np.testing.assert_array_equal(trimap_panels[0][-2], calls[2][1])
+    np.testing.assert_array_equal(trimap_panels[0][-1], guarded_alpha)
 
 
 def test_fba_tiles_keep_resolution_and_respect_known_trimap_regions():
