@@ -2,9 +2,9 @@
 
 # Module B Clothing-Recovery Experiments
 
-![Before, FBA baseline, and after for the four jacket photos](docs/evaluation/clothing/fba/comparison-1.jpg)
+![Before, FBA baseline, and after for the representative jacket and close-up](docs/evaluation/clothing/fba/comparison-1.jpg)
 
-*Top to bottom: shot2–shot5. Each row: input / main before / FBA with a main-derived trimap / ours after. Composites use a white background.*
+*Top to bottom: shot2 and shot5. Each row: input / main before / FBA with a main-derived trimap / ours after. Composites use a white background.*
 
 ![Before, FBA baseline, and after for the four dark-room photos](docs/evaluation/clothing/fba/comparison-2.jpg)
 
@@ -18,9 +18,11 @@ If the existing background-separation pipeline is unfamiliar, first read the [Mo
 
 The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model; FBA is an offline learned reference only.
 
-## Full-Dataset Evaluation: 12 Unique Photos
+## Full-Dataset Evaluation: 12 Photo Files
 
 We compared `shot2`–`shot5`, `test1`–`test6`, `test8`, and `test9` in `docs/evaluation/test`. The four photos in `docs/evaluation/crown-crop/originals/` are byte-identical copies of `shot2`–`shot5`, so they are not counted again.
+
+The 12 files are not 12 independent scenes: `shot2`–`shot4` are very similar views of the same scene. The comparison and trimap sheets show `shot2` as their representative and retain the differently framed `shot5`; the table and CSVs still include all 12 photos.
 
 The existing baseline is main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`; the improved implementation is `06ec619158d68d7c3417fd47ce8fd3703ae269ca`. The additional FBA reference processes the **whole 640 px-wide frame**, including clothing, using a trimap derived from that main baseline and landmarks. It is not the earlier head-only FBA crop. Each input and set of landmarks is shared; relighting strength is 0 and the replacement background is white. Each app run uses a new `Matter` with `update=False`, so color models do not carry over from another photograph.
 
@@ -155,7 +157,7 @@ uv run pytest tests/test_matting_checker.py -q
 uv run pytest -q
 ```
 
-Each evaluation writes three comparison sheets and `measurements.csv`. `--sample-figure` also produces the `sample-regions.jpg` shown above. The default baseline is the fixed main commit above; `--baseline SHA` overrides it. The tool loads that revision's `matting.py` from Git using the current shared configuration, so the baseline commit must be present locally. The only shared-configuration difference from the fixed baseline is the new clothing-shade constant, which the baseline code does not use.
+Each evaluation writes three comparison sheets and `measurements.csv`; the sheets show 10 photos and the CSV retains all 12. `--sample-figure` also produces the `sample-regions.jpg` shown above. The default baseline is the fixed main commit above; `--baseline SHA` overrides it. The tool loads that revision's `matting.py` from Git using the current shared configuration, so the baseline commit must be present locally. The only shared-configuration difference from the fixed baseline is the new clothing-shade constant, which the baseline code does not use.
 
 To reproduce the FBA comparison, first review the [authors' license and model notice](https://github.com/MarcoForte/FBA_Matting). The source is MIT-licensed, but the released weights are **noncommercial only**; this comparison does not authorize commercial or product use. After acknowledging that restriction:
 

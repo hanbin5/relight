@@ -2,9 +2,9 @@
 
 # Module B 옷 영역 복원 실험
 
-![재킷 사진 4장의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-1.jpg)
+![대표 재킷 사진과 근접 사진의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-1.jpg)
 
-*위에서부터 shot2–shot5. 각 행은 원본 / main 기존 결과 / main에서 만든 트라이맵을 쓴 FBA / 개선 결과입니다. 합성 배경은 흰색입니다.*
+*위에서부터 shot2, shot5. 각 행은 원본 / main 기존 결과 / main에서 만든 트라이맵을 쓴 FBA / 개선 결과입니다. 합성 배경은 흰색입니다.*
 
 ![어두운 방 사진 4장의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-2.jpg)
 
@@ -18,9 +18,11 @@
 
 여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않으며, FBA는 오프라인 학습 모델 기준선입니다.
 
-## 전체 데이터셋 평가: 고유 사진 12장
+## 전체 데이터셋 평가: 사진 파일 12개
 
 `docs/evaluation/test`의 `shot2`–`shot5`, `test1`–`test6`, `test8`, `test9`를 비교했습니다. `docs/evaluation/crown-crop/originals/`의 네 사진은 `shot2`–`shot5`와 바이트 단위로 같아 다시 세지 않았습니다.
+
+12개 파일이 서로 독립적인 12개 장면은 아닙니다. `shot2`–`shot4`는 같은 장면의 비슷한 사진이므로 비교 그림과 트라이맵 그림에는 대표인 `shot2`만 보여 주고, 구도가 다른 `shot5`는 유지했습니다. 표와 CSV에는 12장 모두 남아 있습니다.
 
 기존 기준선은 main의 `e96bb08cb678634207ea3aa45f086152c4c96f11`, 개선된 코드는 `06ec619158d68d7c3417fd47ce8fd3703ae269ca`입니다. 추가한 FBA 기준선은 main 기준선과 랜드마크에서 만든 트라이맵을 사용해 옷을 포함한 **너비 640 px 전체 프레임**을 처리합니다. 앞선 머리 crop 전용 FBA 결과가 아닙니다. 같은 입력과 랜드마크를 사용하고 relighting strength는 0, 합성 배경은 흰색으로 맞췄습니다. 앱 결과는 각각 새 `Matter`에서 `update=False`로 실행해 이전 사진의 색 모델을 이어받지 않았습니다.
 
@@ -155,7 +157,7 @@ uv run pytest tests/test_matting_checker.py -q
 uv run pytest -q
 ```
 
-각 평가 명령은 비교 그림 3장과 `measurements.csv`를 만듭니다. `--sample-figure`는 위의 `sample-regions.jpg`도 생성합니다. 기본 기준선은 위의 고정 main 커밋이며 `--baseline SHA`로 바꿀 수 있습니다. 도구는 Git에서 해당 버전의 `matting.py`를 읽고 현재 공통 설정을 사용하므로, 기준선 커밋이 로컬 Git에 있어야 합니다. 고정 기준선과 이 브랜치의 공통 설정 차이는 새 옷 음영 상수뿐이며 기준선 코드는 이를 사용하지 않습니다.
+각 평가 명령은 비교 그림 3장과 `measurements.csv`를 만듭니다. 그림에는 10장을 보여 주고 CSV에는 12장 모두 남깁니다. `--sample-figure`는 위의 `sample-regions.jpg`도 생성합니다. 기본 기준선은 위의 고정 main 커밋이며 `--baseline SHA`로 바꿀 수 있습니다. 도구는 Git에서 해당 버전의 `matting.py`를 읽고 현재 공통 설정을 사용하므로, 기준선 커밋이 로컬 Git에 있어야 합니다. 고정 기준선과 이 브랜치의 공통 설정 차이는 새 옷 음영 상수뿐이며 기준선 코드는 이를 사용하지 않습니다.
 
 FBA 비교를 재현하기 전 [저자의 라이선스와 모델 안내](https://github.com/MarcoForte/FBA_Matting)를 확인하세요. 소스는 MIT 라이선스지만 공개 가중치는 **비상업적 용도로만** 사용할 수 있으며, 이 비교가 상업적 사용이나 제품 탑재를 허용하는 것은 아닙니다. 이 제한을 확인한 뒤:
 

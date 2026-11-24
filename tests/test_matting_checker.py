@@ -120,6 +120,41 @@ def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
     assert np.array_equal(np.any(old_view != guarded_view, axis=2), border & guard)
 
 
+@pytest.mark.parametrize("columns", [3, 4, 5])
+def test_clothing_sheets_show_representative_jacket_and_keep_other_photos(
+        tmp_path, monkeypatch, columns):
+    from matplotlib.figure import Figure
+    from tools.eval_clothing import write_sheets
+
+    names = ("shot2", "shot3", "shot4", "shot5", "test1", "test2",
+             "test3", "test4", "test5", "test6", "test8", "test9")
+    panels = [
+        (name, *(np.full((2, 2), i * 10 + c, np.uint8) for c in range(columns)))
+        for i, name in enumerate(names)
+    ]
+    saved = {}
+
+    def capture(fig, path, **_kwargs):
+        axes = fig.axes
+        saved[path.name] = [
+            (axes[r].get_ylabel(),
+             [int(ax.images[0].get_array()[0, 0]) for ax in axes[r:r + columns]])
+            for r in range(0, len(axes), columns)
+        ]
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    write_sheets(panels, [f"Column {c}" for c in range(columns)], "comparison", tmp_path)
+    expected_groups = (("shot2", "shot5"), ("test1", "test2", "test3", "test4"),
+                       ("test5", "test6", "test8", "test9"))
+    assert saved == {
+        f"comparison-{page}.jpg": [
+            (name, [names.index(name) * 10 + c for c in range(columns)])
+            for name in group
+        ]
+        for page, group in enumerate(expected_groups, start=1)
+    }
+
+
 def test_fba_trimap_keeps_a_wide_unknown_band_around_the_whole_person():
     from types import SimpleNamespace
 

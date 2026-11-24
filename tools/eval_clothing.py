@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "e96bb08cb678634207ea3aa45f086152c4c96f11"
 NAMES = ["shot2", "shot3", "shot4", "shot5", "test1", "test2",
          "test3", "test4", "test5", "test6", "test8", "test9"]
+SHEET_GROUPS = (
+    ("shot2", "shot5"),
+    ("test1", "test2", "test3", "test4"),
+    ("test5", "test6", "test8", "test9"),
+)
 FBA_BAND = 0.5
 FBA_EROSION = 0.06
 
@@ -106,6 +111,30 @@ def sample_views(rgb, lm, ctx, fast):
     return [rgb, overlay([(old_bg, orange)]),
             overlay([(guarded_bg, orange), (old_bg & guard, blue)]),
             overlay([(clothing_fg, green)])]
+
+
+def write_sheets(items, titles, prefix, out):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    panels = {name: images for name, *images in items}
+    for page, names in enumerate(SHEET_GROUPS, start=1):
+        fig, axes = plt.subplots(
+            len(names), len(titles), figsize=(3 * len(titles), 2.5 * len(names)),
+            layout="constrained", squeeze=False)
+        for r, name in enumerate(names):
+            for c, image in enumerate(panels[name]):
+                vmax = 1 if image.ndim == 2 and np.issubdtype(image.dtype, np.floating) else 255
+                axes[r, c].imshow(image, cmap="gray", vmin=0, vmax=vmax)
+                axes[r, c].set_xticks([])
+                axes[r, c].set_yticks([])
+                if r == 0:
+                    axes[r, c].set_title(titles[c], fontsize=10)
+                if c == 0:
+                    axes[r, c].set_ylabel(name)
+        fig.savefig(out / f"{prefix}-{page}.jpg", dpi=130)
+        plt.close(fig)
 
 
 def main():
@@ -196,33 +225,16 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    def write_sheets(items, titles, prefix):
-        for page in range(3):
-            fig, axes = plt.subplots(4, len(titles), figsize=(3 * len(titles), 10), layout="constrained")
-            for r, (name, *images) in enumerate(items[page * 4:page * 4 + 4]):
-                for c, image in enumerate(images):
-                    vmax = 1 if image.ndim == 2 and np.issubdtype(image.dtype, np.floating) else 255
-                    axes[r, c].imshow(image, cmap="gray", vmin=0, vmax=vmax)
-                    axes[r, c].set_xticks([])
-                    axes[r, c].set_yticks([])
-                    if r == 0:
-                        axes[r, c].set_title(titles[c], fontsize=10)
-                    if c == 0:
-                        axes[r, c].set_ylabel(name)
-            fig.savefig(args.out / f"{prefix}-{page + 1}.jpg", dpi=130)
-            plt.close(fig)
-
     if fba is None:
         write_sheets(panels, ["Input", "Before: white background", "After: white background",
-                              "Before: alpha", "After: alpha"], "comparison")
+                              "Before: alpha", "After: alpha"], "comparison", args.out)
     else:
-        write_sheets(panels, ["Input", "Before: main", "FBA: main trimap", "After: ours"], "comparison")
-        write_sheets(fba_panels, ["Input", "FBA trimap", "FBA alpha"], "trimap")
+        write_sheets(panels, ["Input", "Before: main", "FBA: main trimap", "After: ours"],
+                     "comparison", args.out)
+        write_sheets(fba_panels, ["Input", "FBA trimap", "FBA alpha"], "trimap", args.out)
     if args.sample_figure:
+        import matplotlib.pyplot as plt
+
         fig, axes = plt.subplots(2, 4, figsize=(12, 8), layout="constrained")
         for r, name in enumerate(("shot2", "test5")):
             for ax, image in zip(axes[r], sample_panels[name]):
