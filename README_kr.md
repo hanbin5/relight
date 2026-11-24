@@ -2,6 +2,18 @@
 
 # Module B 옷 영역 복원 실험
 
+![재킷 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-1.jpg)
+
+*위에서부터 shot2–shot5. 각 행은 원본 / 기존 흰 배경 합성 / 개선 후 합성 / 기존 alpha / 개선 후 alpha입니다. Alpha는 흰색이 인물, 검정이 배경입니다.*
+
+![어두운 방 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-2.jpg)
+
+*위에서부터 test1–test4. 열 순서는 같습니다.*
+
+![나머지 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-3.jpg)
+
+*위에서부터 test5, test6, test8, test9. 열 순서는 같습니다.*
+
 기존 배경 분리 과정이 익숙하지 않다면 먼저 [Module B 배경 분리 설명](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)을 읽어 주세요. 이 문서는 기존 과정을 반복하지 않고, 빠진 옷을 복원하기 위해 시도한 방법과 그 결과를 설명합니다. 변경은 오프라인 실험에만 머물지 않고 앱의 `idphoto/matting.py`에 적용되어 있습니다.
 
 여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 옷을 의미적으로 인식하는 분할 모델은 사용하지 않습니다.
@@ -31,25 +43,13 @@
 
 ### 재킷: shot2–shot5
 
-![재킷 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-1.jpg)
-
-*각 행은 원본 / 기존 흰 배경 합성 / 개선 후 합성 / 기존 alpha / 개선 후 alpha입니다. Alpha는 흰색이 인물, 검정이 배경입니다. 열과 사진 이름은 사진 바깥에 표시했습니다.*
-
 shot2에서는 기존에 거의 사라졌던 카키 재킷이 더 남지만, 모든 소매가 복원되거나 배경이 완전히 제거된 것은 아닙니다. shot5에서는 얼굴이 화면을 크게 차지해 표본 후보가 0개이므로 기존 결과가 그대로 남습니다.
 
 ### 어두운 방: test1–test4
 
-![어두운 방 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-2.jpg)
-
-*열 순서와 alpha 표시 방식은 위와 같습니다.*
-
 test1과 test2에서는 더 넓은 검은 상의와 함께 방의 어두운 물체도 남습니다. 단순히 마스크가 커졌다는 사실만으로 옷을 정확히 분리했다고 판단할 수 없는 사례입니다.
 
 ### 밝은 벽과 다른 자세: test5, test6, test8, test9
-
-![나머지 사진 4장의 기존 결과와 개선 결과](docs/evaluation/clothing/comparison-3.jpg)
-
-*열 순서와 alpha 표시 방식은 위와 같습니다.*
 
 test5의 오른쪽 흰 어깨는 전보다 넓어졌지만, test6에서는 어깨 뒤의 밝은 벽까지 새로 따라 들어옵니다. 비슷한 색의 옷과 벽을 구분하는 문제는 해결되지 않았습니다.
 

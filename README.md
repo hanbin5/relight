@@ -2,6 +2,18 @@
 
 # Module B Clothing-Recovery Experiments
 
+![Before and after for the four jacket photos](docs/evaluation/clothing/comparison-1.jpg)
+
+*Top to bottom: shot2–shot5. Each row: input / baseline composite on white / improved composite / baseline alpha / improved alpha. In alpha, white is foreground and black is background.*
+
+![Before and after for the four dark-room photos](docs/evaluation/clothing/comparison-2.jpg)
+
+*Top to bottom: test1–test4. The column order is the same.*
+
+![Before and after for the remaining four photos](docs/evaluation/clothing/comparison-3.jpg)
+
+*Top to bottom: test5, test6, test8, test9. The column order is the same.*
+
 If the existing background-separation pipeline is unfamiliar, first read the [Module B matting overview](https://github.com/hanbin5/relight/blob/module-b/matting/README.md). This report does not repeat that pipeline; it describes the attempts to recover missing clothing and their results. The selected change is in the app's `idphoto/matting.py`, not just an offline experiment.
 
 The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. There is no semantic clothing-segmentation model.
@@ -31,25 +43,13 @@ The baseline is main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`; the impr
 
 ### Jackets: shot2–shot5
 
-![Before and after for the four jacket photos](docs/evaluation/clothing/comparison-1.jpg)
-
-*Each row: input / baseline composite on white / improved composite / baseline alpha / improved alpha. In alpha, white is foreground and black is background. Column and photo names are outside the photographs.*
-
 Much of shot2's previously missing khaki jacket returns, but not every sleeve or background error is fixed. In shot5 the face fills the frame and there are zero clothing-sample candidates, so the baseline result is left unchanged.
 
 ### Dark room: test1–test4
 
-![Before and after for the four dark-room photos](docs/evaluation/clothing/comparison-2.jpg)
-
-*Columns and alpha colors are the same as above.*
-
 In test1 and test2, a wider area of black clothing remains, but dark objects in the room remain with it. A larger mask alone does not establish that the clothing has been separated correctly.
 
 ### Light walls and other poses: test5, test6, test8, test9
-
-![Before and after for the remaining four photos](docs/evaluation/clothing/comparison-3.jpg)
-
-*Columns and alpha colors are the same as above.*
 
 The right white shoulder in test5 is wider than before, but in test6 the bright wall behind the shoulders is newly included as well. Separating similarly colored clothing and wall remains unsolved.
 
