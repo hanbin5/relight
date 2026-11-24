@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from idphoto import matting, synthetic
+from idphoto import matting, npimg, synthetic
 from idphoto.checker import AutoShutter
 
 from .conftest import FRONT, SIDE, make_ctx, run_pipeline
@@ -67,6 +67,57 @@ def test_clothing_models_skip_cropped_chest_and_reset_warm_state():
     assert matter.clothing_bg is matter.clothing_fg is None
     matter.reset()
     assert matter.bg is matter.fg is None
+
+
+@pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
+def test_clothing_sample_views_show_the_guard_and_candidates(fast):
+    from idphoto.relight import Relighter
+    from tools.eval_clothing import sample_views
+
+    rgb, lm, _, _ = clothing_scene("white")
+    rgb = rgb[:-1]
+    ctx = make_ctx(rgb, lm)
+    Relighter().process(ctx, strength=0.0)
+    matting.Matter().process(ctx, fast=fast, update=False)
+    original, old_view, guarded_view, clothing_view = sample_views(rgb, lm, ctx, fast)
+    s = 2 if fast else 1
+    shape = (rgb.shape[0] // s, rgb.shape[1] // s)
+    lm_s = lm / np.float32(s)
+    old_bg = matting.person_prior(shape, lm_s)[0] <= 0
+    _, _, clothing_fg, guard = matting.clothing_regions(shape, lm_s)
+    excluded = npimg.upsample_nearest(old_bg & guard, s, rgb.shape[:2])
+    candidates = npimg.upsample_nearest(clothing_fg, s, rgb.shape[:2])
+    assert excluded.any() and candidates.any()
+    assert np.array_equal(np.any(old_view != guarded_view, axis=2), excluded)
+    assert np.array_equal(np.any(original != clothing_view, axis=2), candidates)
+
+    ctx.stats["matting"]["clothing_background_samples"] += 1
+    with pytest.raises(RuntimeError, match="Sample regions do not match"):
+        sample_views(rgb, lm, ctx, fast)
+
+
+def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
+    from idphoto.context import FrameContext
+    from tools.eval_clothing import sample_views
+
+    shape = (20, 30)
+    rgb = np.full((*shape, 3), 128, np.uint8)
+    lm = np.zeros((478, 3), np.float32)
+    guard = np.zeros(shape, bool)
+    guard[:2, :4] = True
+    clothing_fg = np.zeros(shape, bool)
+    clothing_fg[5:15, 10:20] = True
+    border = np.zeros(shape, bool)
+    border[[0, -1], :] = border[:, [0, -1]] = True
+    monkeypatch.setattr(matting, "person_prior", lambda *_: (np.ones(shape), None))
+    monkeypatch.setattr(matting, "foreground_seeds", lambda *_: np.ones(shape, bool))
+    monkeypatch.setattr(matting, "clothing_regions", lambda *_: (None, None, clothing_fg, guard))
+    ctx = FrameContext(raw_frame=rgb, landmarks=lm)
+    ctx.stats["matting"] = {"clothing_samples": int(clothing_fg.sum()),
+                            "clothing_background_samples": int((border & ~guard).sum())}
+    original, old_view, guarded_view, _ = sample_views(rgb, lm, ctx, fast=False)
+    assert np.array_equal(np.any(old_view != original, axis=2), border)
+    assert np.array_equal(np.any(old_view != guarded_view, axis=2), border & guard)
 
 
 @pytest.mark.parametrize("scene", [

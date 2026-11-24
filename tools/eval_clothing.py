@@ -10,7 +10,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from idphoto import color, matting
+from idphoto import color, matting, npimg
 from idphoto.context import FrameContext
 from idphoto.landmarks import FaceLandmarkDetector
 from idphoto.pipeline import to_live
@@ -41,6 +41,38 @@ def process(module, rgb, lm, fast):
     return ctx, 1000 * (time.perf_counter() - start)
 
 
+def sample_views(rgb, lm, ctx, fast):
+    h, w = rgb.shape[:2]
+    s = 2 if fast else 1
+    hs, ws = h // s, w // s
+    lm_s = lm / np.float32(s)
+    face = ctx.face_mask if ctx.face_mask is not None else np.zeros((h, w), bool)
+    face_s = face[:hs * s:s, :ws * s:s]
+    old_bg = matting.person_prior((hs, ws), lm_s)[0] <= 0
+    old_fg = matting.foreground_seeds((hs, ws), lm_s, face_s)
+    if old_bg.sum() < 50 or old_fg.sum() < 50:
+        old_bg = np.zeros((hs, ws), bool)
+        old_bg[[0, -1], :] = old_bg[:, [0, -1]] = True
+    _, _, clothing_fg, guard = matting.clothing_regions((hs, ws), lm_s)
+    guarded_bg = old_bg & ~guard
+    stats = ctx.stats["matting"]
+    if (clothing_fg.sum() != stats["clothing_samples"]
+            or guarded_bg.sum() != stats["clothing_background_samples"]):
+        raise RuntimeError("Sample regions do not match the matting statistics")
+
+    def overlay(layers):
+        image = rgb.copy()
+        for region, shade in layers:
+            pixels = npimg.upsample_nearest(region, s, (h, w))
+            image[pixels] = (0.55 * rgb[pixels] + 0.45 * np.asarray(shade)).astype(np.uint8)
+        return image
+
+    orange, blue, green = (255, 130, 0), (0, 170, 255), (0, 230, 70)
+    return [rgb, overlay([(old_bg, orange)]),
+            overlay([(guarded_bg, orange), (old_bg & guard, blue)]),
+            overlay([(clothing_fg, green)])]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", default=BASELINE)
@@ -48,11 +80,13 @@ def main():
     parser.add_argument("--cache", type=Path, default=ROOT / "out/clothing-landmarks")
     parser.add_argument("--full-grid", action="store_true",
                         help="shutter algorithm (s=1) on the same 640-px input, not original resolution")
+    parser.add_argument("--sample-figure", action="store_true",
+                        help="also visualize sample candidates for shot2 and test5")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     before_module = baseline_module(args.baseline)
-    rows, panels = [], []
+    rows, panels, sample_panels = [], [], {}
     detector = None
     try:
         for name in NAMES:
@@ -89,6 +123,8 @@ def main():
             rows.append(row)
             panels.append((name, rgb, color.encode_u8(before.output_frame),
                            color.encode_u8(after.output_frame), before.alpha, after.alpha))
+            if args.sample_figure and name in ("shot2", "test5"):
+                sample_panels[name] = sample_views(rgb, lm, after, not args.full_grid)
             print(row, flush=True)
     finally:
         if detector is not None:
@@ -116,6 +152,14 @@ def main():
                 if c == 0:
                     axes[r, c].set_ylabel(name)
         fig.savefig(args.out / f"comparison-{page + 1}.jpg", dpi=130)
+        plt.close(fig)
+    if args.sample_figure:
+        fig, axes = plt.subplots(2, 4, figsize=(12, 8), layout="constrained")
+        for r, name in enumerate(("shot2", "test5")):
+            for ax, image in zip(axes[r], sample_panels[name]):
+                ax.imshow(image)
+                ax.set_axis_off()
+        fig.savefig(args.out / "sample-regions.jpg", dpi=150, bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
 
 
