@@ -2,15 +2,15 @@
 
 # Module B 옷 영역 복원 실험
 
-![대표 재킷 사진과 근접 사진의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-1.jpg)
+![shot2와 shot5의 원본, Main, FBA, Clothing improvement 결과](docs/evaluation/clothing/fba/comparison-1.jpg)
 
-*위에서부터 shot2, shot5. 각 행은 원본 / main 기존 결과 / main에서 만든 트라이맵을 쓴 FBA / 개선 결과입니다. 합성 배경은 흰색입니다.*
+*위에서부터 shot2, shot5. 왼쪽부터 **Original**(원본), **Main**(기존 main 처리 결과), **FBA**(FBA 모델 결과), **Clothing improvement**(옷 복원 개선 결과)입니다. FBA에는 Main의 alpha 마스크와 얼굴 랜드마크로 자동 생성한 트라이맵(인물·배경·미확정 영역 구분)을 입력했습니다. 결과 세 열의 합성 배경은 흰색입니다.*
 
-![어두운 방 사진 4장의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-2.jpg)
+![어두운 방 사진 4장의 원본, Main, FBA, Clothing improvement 결과](docs/evaluation/clothing/fba/comparison-2.jpg)
 
 *위에서부터 test1–test4. 열 순서는 같습니다.*
 
-![나머지 사진 4장의 기존 결과, FBA 기준선, 개선 결과](docs/evaluation/clothing/fba/comparison-3.jpg)
+![나머지 사진 4장의 원본, Main, FBA, Clothing improvement 결과](docs/evaluation/clothing/fba/comparison-3.jpg)
 
 *위에서부터 test5, test6, test8, test9. 열 순서는 같습니다.*
 
@@ -61,7 +61,7 @@ FBA는 사진만이 아니라 확정 전경·확정 배경·미확정 영역을 
 
 ![재킷 사진의 FBA 입력, 자동 트라이맵과 alpha](docs/evaluation/clothing/fba/trimap-1.jpg)
 
-*왼쪽부터 입력 / 트라이맵 / FBA alpha입니다. 트라이맵의 흰색은 확정 전경, 검정은 확정 배경, 회색은 미확정입니다. 넓은 회색 몸통 영역에는 옷뿐 아니라 배경도 포함됩니다. 나머지 사진은 [어두운 방 트라이맵](docs/evaluation/clothing/fba/trimap-2.jpg), [그 외 트라이맵](docs/evaluation/clothing/fba/trimap-3.jpg)에서 볼 수 있습니다.*
+*왼쪽부터 Original / FBA trimap / FBA alpha입니다. 트라이맵의 흰색은 확정 전경, 검정은 확정 배경, 회색은 미확정입니다. 넓은 회색 몸통 영역에는 옷뿐 아니라 배경도 포함됩니다. 나머지 사진은 [어두운 방 트라이맵](docs/evaluation/clothing/fba/trimap-2.jpg), [그 외 트라이맵](docs/evaluation/clothing/fba/trimap-3.jpg)에서 볼 수 있습니다.*
 
 이는 **main 마스크와 랜드마크에 조건화된 FBA**이며 독립적인 자동 분할 기준선이나 사람이 수정한 트라이맵이 아닙니다. 배경을 확정 전경으로 잘못 지정하면 지울 수 없고, 옷을 확정 배경으로 지정하면 복원할 수 없습니다. 넓은 몸통 미확정 영역은 기존 마스크 바깥 소매를 FBA가 판단할 기회를 주지만 벽 누출도 허용합니다. 라이브 트라이맵의 미확정 비율은 31.1–59.7%, 중앙값 42.5%로, 입력의 특성이지 품질 점수가 아닙니다. 예를 들어 shot2–shot4에서는 FBA가 재킷을 더 남기지만 shot5의 재킷은 여전히 사라지고 test1/test9에는 넓은 배경 안개가 남습니다.
 
@@ -69,7 +69,7 @@ FBA도 앱 비교와 같은 640 px 입력을 쓰며 CPU 스레드 4개, 타일 �
 
 라이브는 640 px 입력에서 색 판정과 필터 계수를 **절반 격자 `s=2`**로 계산합니다. 전체 격자는 **같은 640 px 입력**에 촬영 알고리즘의 `s=1`을 적용하고 해당 main alpha에서 FBA 트라이맵을 다시 만든 비교입니다. [전체 격자 재킷](docs/evaluation/clothing/full-grid-fba/comparison-1.jpg), [어두운 방](docs/evaluation/clothing/full-grid-fba/comparison-2.jpg), [나머지 사진](docs/evaluation/clothing/full-grid-fba/comparison-3.jpg)을 볼 수 있습니다. shot2와 shot4의 어깨는 이 경로에서 여전히 조각나고, shot3은 라이브보다 많이 추가됩니다. **원본 해상도 저장 결과를 평가한 것이 아니며**, 두 경로의 경계가 같다는 뜻도 아닙니다.
 
-전체 격자 FBA 트라이맵과 alpha도 [재킷](docs/evaluation/clothing/full-grid-fba/trimap-1.jpg), [어두운 방](docs/evaluation/clothing/full-grid-fba/trimap-2.jpg), [나머지 사진](docs/evaluation/clothing/full-grid-fba/trimap-3.jpg)에서 볼 수 있습니다. 기존 main과 개선 후의 라이브 alpha 비교도 [재킷](docs/evaluation/clothing/comparison-1.jpg), [어두운 방](docs/evaluation/clothing/comparison-2.jpg), [나머지 사진](docs/evaluation/clothing/comparison-3.jpg)에 남겨 두었습니다.
+전체 격자 FBA 트라이맵과 alpha도 [재킷](docs/evaluation/clothing/full-grid-fba/trimap-1.jpg), [어두운 방](docs/evaluation/clothing/full-grid-fba/trimap-2.jpg), [나머지 사진](docs/evaluation/clothing/full-grid-fba/trimap-3.jpg)에서 볼 수 있습니다. 기존 main과 개선 후의 라이브 alpha 비교도 [재킷](docs/evaluation/clothing/comparison-1.jpg), [어두운 방](docs/evaluation/clothing/comparison-2.jpg), [나머지 사진](docs/evaluation/clothing/comparison-3.jpg)에 남겨 두었습니다. 이 그림의 열은 Original / Main / Clothing improvement / Main alpha / Clothing improvement alpha 순입니다.
 
 [라이브 CSV](docs/evaluation/clothing/measurements.csv)와 [전체 격자 CSV](docs/evaluation/clothing/full-grid/measurements.csv)에는 12장 각각의 임계값, 표본 후보 수, 적용 여부와 단일 실행 시간이 있습니다. 전체 합계는 라이브에서 추가 161,275개·제거 9개, 전체 격자에서 추가 122,211개·제거 6개입니다. 제거는 기존 alpha가 0.5를 넘고 개선 후 0.5 이하가 된 픽셀입니다. 이진 마스크에는 정리 **전** 추가만 하지만, 이후 정리와 guided filter를 다시 계산하면 기존 경계도 달라질 수 있습니다.
 

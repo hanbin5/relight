@@ -2,15 +2,15 @@
 
 # Module B Clothing-Recovery Experiments
 
-![Before, FBA baseline, and after for the representative jacket and close-up](docs/evaluation/clothing/fba/comparison-1.jpg)
+![Original, Main, FBA, and Clothing improvement for shot2 and shot5](docs/evaluation/clothing/fba/comparison-1.jpg)
 
-*Top to bottom: shot2 and shot5. Each row: input / main before / FBA with a main-derived trimap / ours after. Composites use a white background.*
+*Top to bottom: shot2 and shot5. Left to right: **Original** (input photo), **Main** (existing main result), **FBA** (FBA model result), and **Clothing improvement** (improved clothing-recovery result). FBA receives a trimap (known foreground, known background, and unknown regions) automatically derived from the Main alpha mask and facial landmarks. The three result columns are composited on white.*
 
-![Before, FBA baseline, and after for the four dark-room photos](docs/evaluation/clothing/fba/comparison-2.jpg)
+![Original, Main, FBA, and Clothing improvement for the four dark-room photos](docs/evaluation/clothing/fba/comparison-2.jpg)
 
 *Top to bottom: test1–test4. The column order is the same.*
 
-![Before, FBA baseline, and after for the remaining four photos](docs/evaluation/clothing/fba/comparison-3.jpg)
+![Original, Main, FBA, and Clothing improvement for the remaining four photos](docs/evaluation/clothing/fba/comparison-3.jpg)
 
 *Top to bottom: test5, test6, test8, test9. The column order is the same.*
 
@@ -61,7 +61,7 @@ FBA estimates foreground, background, and alpha from an image and a **trimap**, 
 
 ![FBA input, automatic trimap, and alpha for the jacket photos](docs/evaluation/clothing/fba/trimap-1.jpg)
 
-*Left to right: input / trimap / FBA alpha. In the trimap, white is forced foreground, black is forced background, and gray is unknown. The broad gray body region includes background as well as clothing. [Dark-room trimaps](docs/evaluation/clothing/fba/trimap-2.jpg) and [remaining trimaps](docs/evaluation/clothing/fba/trimap-3.jpg) show the other eight photos.*
+*Left to right: Original / FBA trimap / FBA alpha. In the trimap, white is forced foreground, black is forced background, and gray is unknown. The broad gray body region includes background as well as clothing. [Dark-room trimaps](docs/evaluation/clothing/fba/trimap-2.jpg) and [remaining trimaps](docs/evaluation/clothing/fba/trimap-3.jpg) show the other eight photos.*
 
 This is **FBA conditioned on the main mask and landmarks**, not an independent automatic segmentation baseline or a manually corrected trimap. Background erroneously marked sure foreground cannot be removed, and clothing marked sure background cannot be recovered. The wide body region allows FBA to decide on sleeves outside the old mask, but also allows wall leakage. The unknown share of the live trimaps ranges from 31.1% to 59.7% (median 42.5%); this describes the input, not quality. For example, FBA retains more jacket in shot2–shot4, but shot5's jacket still fades, and test1/test9 have substantial background haze.
 
@@ -69,7 +69,7 @@ FBA runs on the same resized 640 px input as the app comparisons, on CPU with fo
 
 The live path calculates color decisions and filter coefficients on a **half-size grid, `s=2`**, from the 640 px input. The full-grid comparison applies the shutter algorithm's **`s=1` to the same 640 px input** and derives a new FBA trimap from that mode's main alpha: [jackets](docs/evaluation/clothing/full-grid-fba/comparison-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/comparison-2.jpg), and [other photos](docs/evaluation/clothing/full-grid-fba/comparison-3.jpg). On this path the shoulders in shot2 and shot4 remain fragmented, while shot3 gains more than in live mode. **This is not an original-resolution export evaluation**, nor evidence that the two paths produce identical boundaries.
 
-Full-grid FBA trimaps and alphas: [jackets](docs/evaluation/clothing/full-grid-fba/trimap-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/trimap-2.jpg), [other photos](docs/evaluation/clothing/full-grid-fba/trimap-3.jpg). The earlier main-versus-ours live alpha sheets remain available for [jackets](docs/evaluation/clothing/comparison-1.jpg), [dark room](docs/evaluation/clothing/comparison-2.jpg), and [other photos](docs/evaluation/clothing/comparison-3.jpg).
+Full-grid FBA trimaps and alphas: [jackets](docs/evaluation/clothing/full-grid-fba/trimap-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/trimap-2.jpg), [other photos](docs/evaluation/clothing/full-grid-fba/trimap-3.jpg). The earlier main-versus-ours live alpha sheets remain available for [jackets](docs/evaluation/clothing/comparison-1.jpg), [dark room](docs/evaluation/clothing/comparison-2.jpg), and [other photos](docs/evaluation/clothing/comparison-3.jpg). Their columns are Original / Main / Clothing improvement / Main alpha / Clothing improvement alpha.
 
 The [live CSV](docs/evaluation/clothing/measurements.csv) and [full-grid CSV](docs/evaluation/clothing/full-grid/measurements.csv) record thresholds, sample-candidate counts, application status, and single-run times for all 12 photos. Across the set, live mode adds 161,275 pixels and removes 9; full grid adds 122,211 and removes 6. Removed pixels had alpha above 0.5 before and at most 0.5 after. Recovery only adds to the binary mask **before** cleanup; subsequent cleanup and guided-filter recomputation can also change existing edges.
 

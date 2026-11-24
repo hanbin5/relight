@@ -226,12 +226,12 @@ def main():
         writer.writerows(rows)
 
     if fba is None:
-        write_sheets(panels, ["Input", "Before: white background", "After: white background",
-                              "Before: alpha", "After: alpha"], "comparison", args.out)
+        write_sheets(panels, ["Original", "Main", "Clothing improvement",
+                              "Main alpha", "Clothing improvement alpha"], "comparison", args.out)
     else:
-        write_sheets(panels, ["Input", "Before: main", "FBA: main trimap", "After: ours"],
+        write_sheets(panels, ["Original", "Main", "FBA", "Clothing improvement"],
                      "comparison", args.out)
-        write_sheets(fba_panels, ["Input", "FBA trimap", "FBA alpha"], "trimap", args.out)
+        write_sheets(fba_panels, ["Original", "FBA trimap", "FBA alpha"], "trimap", args.out)
     if args.sample_figure:
         import matplotlib.pyplot as plt
 
