@@ -21,6 +21,10 @@ fba = [
     "gdown>=5.2",
     "torch>=2.6",
 ]
+parsing = [
+    "onnxruntime>=1.20",
+    "pillow>=11",
+]
 
 [build-system]
 requires = ["hatchling"]

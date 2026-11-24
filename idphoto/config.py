@@ -38,6 +38,7 @@ CLUSTER_SPREAD_FLOOR = 0.03  # smallest cluster spread, in sqrt-linear color (se
 BG_SHADOW_SCALE = (0.5, 1.25)  # a background color this much darker/brighter is still background
 FG_SHADE_SCALE = (0.6, 1.5)  # shading varies across the person too
 CLOTHING_SHADE_SCALE = (0.8, 1.2)  # keep white fabric from also explaining a much darker wall
+CLOTHING_CROP_MIN_BG_DISTANCE = 0.9  # reject cropped-chest samples too close to the wall model
 SCORE_TAU = 1.0  # spreads of distance difference per unit of log-odds
 OUTLIER_DISTANCE = 2.5  # distances beyond this many spreads count the same (color seen by neither model)
 PRIOR_CORE = 0.88  # prior probability of the person in the skull and the neck

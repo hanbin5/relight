@@ -100,11 +100,12 @@ def foreground_seeds(shape, lm: np.ndarray, face: np.ndarray) -> np.ndarray:
 
 
 def clothing_regions(shape, lm: np.ndarray):
-    """Clothing gate, probability prior, inner samples, and background-sampling guard.
+    """Clothing gate, probability prior, inner samples, guard, and cropped-chest flag.
 
     The guard is deliberately wider than the gate: an uncertain sleeve is neither a
     sure wall sample nor automatically foreground. Samples widen below the neck to
-    include an outer jacket without collecting the wall above the shoulder.
+    include an outer jacket without collecting the wall above the shoulder. If the
+    chest is cropped, sample the visible sides and allow higher shoulders instead.
     """
     f = face_measures(lm)
     fw, ec, cx, chin_y = f["fw"], f["ec"], f["cx"], f["chin"][1]
@@ -121,7 +122,19 @@ def clothing_regions(shape, lm: np.ndarray):
     torso = np.clip(0.5 + ((0.45 + 1.75 * drop) * fw - dx) / (0.4 * fw), 0.0, 1.0)
     torso = torso * np.clip(0.5 + (yy - chin_y - 0.2 * ec) / (0.4 * ec), 0.0, 1.0)
     likely = 0.5 + (config.PRIOR_TORSO - 0.5) * torso
-    return gate.astype(np.float32), likely.astype(np.float32), samples, guard
+    cropped = bool(samples.sum() < 50 and shape[0] - chin_y > 0.3 * ec)
+    if cropped:
+        start = chin_y - 0.45 * ec
+        upper_drop = np.sqrt(np.clip((yy - start) / ec, 0.0, 1.0))
+        upper_half = (0.6 + 2.2 * upper_drop) * fw
+        side_gate = np.clip(1.0 + (upper_half - dx) / (0.25 * fw), 0.0, 1.0)
+        side_gate *= (yy > start) & (dx > 0.45 * fw)
+        gate = np.maximum(gate, side_gate)
+        likely = np.maximum(likely, 0.5 + 0.12 * side_gate)
+        sample_top = max(chin_y + 0.25 * ec, chin_y + 0.75 * (shape[0] - chin_y))
+        samples = ((yy > sample_top) & (dx > 0.4 * fw) & (dx < 0.85 * fw))
+        guard |= (yy > start) & (dx < upper_half + 0.6 * fw)
+    return gate.astype(np.float32), likely.astype(np.float32), samples, guard, cropped
 
 
 def kmeans(x: np.ndarray, k: int, init=None, iterations: int = 6, seed: int = 0):
@@ -264,15 +277,25 @@ class Matter:
         # 3. Otsu, opening and closing, the part connected to the face, holes filled.
         t = float(np.clip(npimg.otsu_threshold(score[region]), 0.35, 0.65))
         mask = score > t
-        clothing_gate, clothing_likely, clothing_seed, clothing_guard = clothing_regions((hs, ws), lm_s)
+        clothing_gate, clothing_likely, clothing_seed, clothing_guard, clothing_cropped = clothing_regions(
+            (hs, ws), lm_s)
         clothing_bg_seed = bg_seed & ~clothing_guard
         clothing_samples, clothing_background_samples = int(clothing_seed.sum()), int(clothing_bg_seed.sum())
-        clothing_applied = clothing_samples >= 50 and clothing_background_samples >= 50
-        if clothing_applied:
+        clothing_applied = False
+        clothing_used_samples = 0
+        if clothing_samples >= 50 and clothing_background_samples >= 50:
             warm_clothing = update and self.clothing_bg is not None
             cbg = kmeans(_sample(col, clothing_bg_seed, n, 3), config.BG_CLUSTERS,
                          self.clothing_bg[0] if warm_clothing else None, 3 if warm_clothing else 8)
-            cfg = kmeans(_sample(col, clothing_seed, n, 4), config.FG_CLUSTERS,
+            clothing_values = _sample(col, clothing_seed, n, 4)
+            if clothing_cropped:
+                # The close-up sample bands can include wall when shoulders are narrow.
+                distance = nearest_distance(clothing_values, *cbg[:2], bg_scale)
+                clothing_values = clothing_values[distance > config.CLOTHING_CROP_MIN_BG_DISTANCE]
+            clothing_used_samples = len(clothing_values)
+            clothing_applied = clothing_used_samples >= 50
+        if clothing_applied:
+            cfg = kmeans(clothing_values, config.FG_CLUSTERS,
                          self.clothing_fg[0] if warm_clothing else None, 3 if warm_clothing else 8)
             if update:
                 self.clothing_bg, self.clothing_fg = cbg, cfg
@@ -323,7 +346,9 @@ class Matter:
                                 "p_color": p_color, "prior": gate * likely, "coarse_mask": mask,
                                 "clothing_applied": clothing_applied,
                                 "clothing_samples": clothing_samples,
-                                "clothing_background_samples": clothing_background_samples}
+                                "clothing_background_samples": clothing_background_samples,
+                                "clothing_cropped": clothing_cropped,
+                                "clothing_used_samples": clothing_used_samples}
         # 5. Spill removal and compositing.
         ctx.output_frame = relit if background is None else composite(ctx, bg_local, background)
         return ctx

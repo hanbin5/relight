@@ -2,13 +2,66 @@
 
 # Module B Clothing-Recovery Experiments
 
-![Original and five results for the representative photos](docs/evaluation/clothing/fba/comparison.jpg)
+![Original and clothing-recovery results for the representative photos](docs/evaluation/clothing/research/live/comparison.jpg)
 
 If the existing background-separation pipeline is unfamiliar, first read the [Module B matting overview](https://github.com/hanbin5/relight/blob/module-b/matting/README.md). This report does not repeat that pipeline; it describes the attempts to recover missing clothing and their results. The selected change is in the app's `idphoto/matting.py`, not just an offline experiment.
 
-The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model; FBA and the combined result are offline noncommercial research comparisons, not app features.
+The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model. SCHP and FBA are offline experiments, not app features; FBA's weights are noncommercial.
 
-## Full-Dataset Evaluation: 12 Photo Files
+## New Experiment: All 12 Photos
+
+The columns above are `Original / Main / FBA / Previous clothing / Clothing (NumPy) / NumPy + FBA / Main + SCHP clothing / Main + SCHP person`. `Previous clothing` is the prior app implementation, `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`; `Clothing (NumPy)` is the current app implementation including the close-up fallback. `FBA` uses a trimap made from Main alpha, while `NumPy + FBA` uses one made by **the same rules from the current clothing alpha**. Both receive the original photo. The SCHP results combine parsing with **Main alpha**, not with FBA: SCHP clothing uses the upper-clothes, dress, coat, jumpsuit, and scarf classes; SCHP person uses the whole person, including hair.
+
+All 12 photos were evaluated on the same 640 px-wide inputs and landmarks in live mode (`s=2`) and on the [full grid (`s=1`)](docs/evaluation/clothing/research/full-grid/comparison.jpg). The table and [live CSV](docs/evaluation/clothing/research/live/measurements.csv) and [full-grid CSV](docs/evaluation/clothing/research/full-grid/measurements.csv) retain all 12 photos. Because `shot2`–`shot4` depict similar scenes, the figure shows only `shot2` as their representative. Left and right below are as viewed in the image.
+
+| Photo | Current NumPy clothing versus previous | SCHP combination |
+|---|---|---|
+| shot2 | The live jacket remains, but its edge is rough and the full-grid result fragments. | More jacket remains, and person also restores hair. |
+| shot3 | The binary mask is unchanged; part of the left jacket is still missing. | More jacket remains, but the left edge is partly translucent depending on the mode. |
+| shot4 | The binary mask is unchanged, with the right-side background object still present. | More jacket remains and the right-side object is reduced, but the edge is imperfect. |
+| shot5 | Both sides of the close-up jacket return where previously there were no samples; the right shoulder is rough. | Both combinations retain more jacket; person also restores clipped hair. |
+| test1 | The binary mask is unchanged, with dark room objects and holes in the top. | Side background is reduced and the top is more connected, but the person boundary is imperfect. |
+| test2 | The binary mask is unchanged, with dark objects on both sides. | Person improves hair and background, but right-shoulder and sleeve loss and residual fragments are conspicuous. |
+| test3 | The binary mask is unchanged, with a neck notch and background at the right. | Background is reduced and the top is more connected; person also retains more hair. |
+| test4 | The binary mask is unchanged, with a blue object and dark background. | Objects around the clothing are reduced; person also retains more hair. |
+| test5 | The binary mask is unchanged; the right white shoulder and left wall strip remain. | The left wall strip is reduced, but the clothing and neck boundaries are imperfect. |
+| test6 | The binary mask is unchanged, with wall leakage behind the shoulder. | The wall is reduced, but a white hole appears in the bright foreground at the bottom left. |
+| test8 | The binary mask is unchanged, with collar notches and blocky edges. | The top is more connected, but gray residue remains at the right sleeve. |
+| test9 | The binary mask is unchanged, with missing hoodie, attached background, and clipped hair. | More hoodie remains and person restores hair, but the lower clothing boundary is rough. |
+
+**These are qualitative comparisons without ground-truth masks.** Relative to previous clothing at alpha 0.5, shot5 adds 31,525 pixels and removes none in live mode, and adds 31,292 and removes none on the full grid; the other 11 binary masks are unchanged. Added pixels include clothing and background, so they are not recovery or accuracy measurements. The methods and thresholds were chosen after inspecting these same photos, with no independent validation. SCHP looks better in some examples but can also remove clothing, as in test2; we cannot claim it is more accurate overall.
+
+### Methods and Decisions
+
+**App close-up fallback.** When the existing chest candidates number fewer than 50 on the processing grid and more than 0.3 eye-to-chin distances (`ec`) remain below the chin, narrow strips at the visible lower sides become clothing candidates. Their upper boundary is `max(chin + 0.25 ec, chin + 0.75 × visible height below chin)` and their distance from the center is `0.4–0.85` face widths (`fw`). A wider side-shoulder gate starts at `chin - 0.45 ec`, and its surroundings are protected from clothing-background sampling. Candidates at normalized distance 0.9 or less from the background model are discarded; fewer than 50 surviving candidates or background candidates skips the pass and clears clothing warm state on updating frames. This fallback was triggered only for shot5 in both modes. Of 608 candidates, 590 were used in live mode; on the full grid, 2,618 were candidates, at most 2,000 were sampled, and 1,998 survived.
+
+This uses landmark-based geometry and the existing face-connectivity processing, without a separate pose model or per-photo exceptions. We also tried cutting along an image-edge shoulder path and retaining only face-connected regions after erosion, but these cut the white shirts in test5/test6 or the test9 hoodie and were rejected. A close-up sample can still confuse similarly colored walls and clothing, and occlusion or unusual poses can invalidate the sampling assumptions.
+
+**Offline SCHP parsing.** We run a LIP 20-class ONNX conversion of [Self-Correction for Human Parsing](https://github.com/GoGoDuck912/Self-Correction-Human-Parsing), using [this checkpoint](https://huggingface.co/pirocheto/schp-lip-20/tree/7c0028fe34dcd8bd534ffa291a9086cdc856e4a9) on CPU. We use the original inference's BGR channel order and normalization, pad the image to a black square, and resize to 473 × 473 with Pillow bilinear interpolation. This is not pixel-identical to the original affine transform or the converted model card's RGB square stretch. We softmax the 20 logits and use clothing classes 5, 6, 7, 10, and 11 and background class 0.
+
+Both combinations attenuate Main alpha below the chin as SCHP background probability rises from 0.65 to 0.95, while protecting the central neck. Clothing or whole-person probabilities are remapped from 0.15–0.85 to 0–1 and added only in face-associated proposals; the face is preserved. The clothing-only result also uses a landmark-based clothing gate. Connectivity is approximated on a reduced grid and does not perfectly identify the subject. This is our experimental fusion, tuned on these same 12 photos, not a standard method from the paper. SCHP misclassifications, including lost shoulders and holes, propagate into the result.
+
+The original source and converted model card are each labeled MIT, but redistribution and commercial rights for the original training data and weights have not been independently established. The two weight files total about 255 MiB and are pinned to revision `7c0028fe34dcd8bd534ffa291a9086cdc856e4a9`, with SHA-256 `41c9d6c753a387f794bf3cbd9aed5e20c81a934fdc91731475bd46138937f84c` and `be931b91c76ed7707b5426abbccee98620a122b777c7cbd1f771a122803666e7`. The project plan does not permit an additional pretrained segmentation model in the app, so ONNX Runtime and Pillow are only a `parsing` optional dependency and SCHP is not wired into the app. A single live run had a median SCHP inference plus pre/postprocessing time of about 190 ms; this excludes model loading, fusion, and the rest of the app.
+
+### Reproduce the New Comparison
+
+After reviewing FBA's noncommercial restriction, run locally. Photos are not transmitted, and models are stored under Git-ignored `models/`.
+
+```bash
+uv sync --group dev --extra fba --extra parsing
+uv run python tools/fetch_model.py
+uv run --extra fba python tools/fba_reference.py --accept-noncommercial
+uv run --extra parsing python -m tools.schp_reference --download
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --out out/clothing-research/live
+uv run --extra fba --extra parsing python -m tools.eval_clothing --fba --schp --full-grid --out out/clothing-research/full-grid
+uv run --extra fba --extra parsing pytest -q
+```
+
+Each evaluation writes one comparison figure and a 12-row CSV. Main and the SCHP combinations use Main's same local-background estimate and linear-light composite; FBA composites its estimated foreground and alpha in sRGB, so colors are not strictly like-for-like. FBA's automatic trimap and measurement details are described below. The fixed Main and previous-clothing Git commits must be available locally; results can change if landmarks are redetected rather than reused from cache.
+
+## Earlier Clothing and FBA Experiment: 12 Photo Files
+
+The tables and figures below describe the **earlier run before the close-up fallback**, using code `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`. For example, the zero shot5 samples and zero FBA-combination change below are historical, not the current result.
 
 We compared `shot2`–`shot5`, `test1`–`test6`, `test8`, and `test9` in `docs/evaluation/test`. The four photos in `docs/evaluation/crown-crop/originals/` are byte-identical copies of `shot2`–`shot5`, so they are not counted again.
 
@@ -154,7 +207,7 @@ The app's image processing uses NumPy. There is no additional segmentation or de
 | Shading and color support | Clothing linear-intensity scale 0.8–1.2; its square root is used for color distance. Distance to the clothing model must be below the existing cap of 2.5 |
 | Threshold | Original score's Otsu value, clipped to 0.35–0.65 |
 
-If either the clothing candidates or guarded background candidates number fewer than 50 on the processing grid, the additional pass is skipped. On an updating frame, the old clothing models are also cleared; `Matter.reset()` clears both original and clothing models. Application status and candidate counts are recorded in `ctx.stats["matting"]`.
+If the original clothing candidates number fewer than 50, the close-up fallback described above is attempted first. If the usable clothing samples or guarded background candidates still number fewer than 50 on the processing grid, the additional pass is skipped. On an updating frame, the old clothing models are also cleared; `Matter.reset()` clears both original and clothing models. Application status and candidate counts are recorded in `ctx.stats["matting"]`.
 
 **The frame-border fallback still matters.** If the old background or old foreground candidates number fewer than 50, the original code replaces background candidates with the frame border. The clothing-background candidates then also come from that border minus the guard; if at least 50 remain, they can train the clothing-background model. They are not guaranteed to be clean wall pixels.
 
@@ -189,7 +242,7 @@ uv run pytest tests/test_matting_checker.py -q
 uv run pytest -q
 ```
 
-Each evaluation writes one comparison figure and `measurements.csv`; the figure shows 10 photos and the CSV retains all 12. `--sample-figure` also produces the `sample-regions.jpg` shown above. The default baseline is the fixed main commit above; `--baseline SHA` overrides it. The tool loads that revision's `matting.py` from Git using the current shared configuration, so the baseline commit must be present locally. The only shared-configuration difference from the fixed baseline is the new clothing-shade constant, which the baseline code does not use.
+Each evaluation writes one comparison figure and `measurements.csv`; the figure shows 10 photos and the CSV retains all 12. `--sample-figure` also produces the `sample-regions.jpg` shown above. The default baseline is the fixed main commit above; `--baseline SHA` overrides it. The tool loads that revision's `matting.py` from Git using the current shared configuration, so the baseline commit must be present locally. The Main baseline does not use the clothing-shade and close-up sample-distance constants added on this branch. Rerunning these commands with current code can change shot5 and the historical FBA-combination values above.
 
 To reproduce the FBA comparison, first review the [authors' license and model notice](https://github.com/MarcoForte/FBA_Matting). The source is MIT-licensed, but the released weights are **noncommercial only**; this comparison does not authorize commercial or product use. After acknowledging that restriction:
 
@@ -206,8 +259,8 @@ The commands download the authors' source and approximately 139 MB of weights in
 
 Landmarks are detected in image mode and cached by default in `out/clothing-landmarks/`; the same values are used within each before/after pair. The cache is not tracked by Git. Redetection in a fresh environment or with a fresh `--cache` directory can change landmarks and measurements. Missing photos or faces raise errors instead of being silently omitted. `test9.jpg` was restored unchanged from `e8e798c8eee3118bebba4ba8f34c37808f84c250` on `module-b/person-prior`.
 
-Validation with the FBA assets passed 215 tests overall, including 45 matting/checker tests. Main and improved CSV times are single cold-run measurements of the matting stage only; they exclude loading, landmark detection, and relighting. They are diagnostics, not a latency guarantee or a 10 fps claim.
+The earlier FBA experiment passed 215 tests overall, including 45 matting/checker tests. Main and improved CSV times are single cold-run measurements of the matting stage only; they exclude loading, landmark detection, and relighting. They are diagnostics, not a latency guarantee or a 10 fps claim.
 
-This is a **bounded clothing-recovery improvement, not a general portrait-segmentation solution**. It cannot recover clothing without samples, as in shot5; similar-colored objects in test1/test2/test9 and the wall in test6 can remain. Crossed arms or an occluded chest can invalidate the assumed sample and shoulder locations. Original-resolution export, warm starts on real sequences, landmark jitter, and sustained webcam performance were not evaluated. Accuracy or production-readiness claims need hand-drawn masks and temporal evaluation.
+This is a **bounded clothing-recovery improvement, not a general portrait-segmentation solution**. Recovery is skipped when even the close-up fallback cannot obtain enough samples; similar-colored objects in test1/test2/test9 and the wall in test6 can remain. Crossed arms or an occluded chest can invalidate the assumed sample and shoulder locations. Original-resolution export, warm starts on real sequences, landmark jitter, and sustained webcam performance were not evaluated. Accuracy or production-readiness claims need hand-drawn masks and temporal evaluation.
 
 For general app usage, see the [main README](https://github.com/hanbin5/relight/blob/main/README.md). The app produces edited photos and is not for passports or other government IDs.

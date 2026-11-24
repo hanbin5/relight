@@ -1,6 +1,7 @@
 """Compare Module B against a fixed Git revision on the twelve evaluation photos."""
 
 import argparse
+import copy
 import csv
 import subprocess
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from idphoto import color, matting, npimg
+from idphoto import color, config, matting, npimg
 from idphoto.context import FrameContext
 from idphoto.landmarks import FaceLandmarkDetector
 from idphoto.pipeline import to_live
@@ -18,6 +19,7 @@ from idphoto.relight import Relighter
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "e96bb08cb678634207ea3aa45f086152c4c96f11"
+PREVIOUS_CLOTHING = "4276adf6a4cba13d0b98f4a8e333498e8a5c40db"
 NAMES = ["shot2", "shot3", "shot4", "shot5", "test1", "test2",
          "test3", "test4", "test5", "test6", "test8", "test9"]
 SHEET_NAMES = tuple(name for name in NAMES if name not in ("shot3", "shot4"))
@@ -93,6 +95,28 @@ def guarded_fba_trimap(rgb, main_trimap, clothing_trimap, reference_alpha):
     return guarded
 
 
+def composite_main_alpha(module, result, lm, alpha, fast):
+    """Use the main result's local wall estimate to composite an experimental alpha."""
+    h, w = alpha.shape
+    s = 2 if fast else 1
+    lin = npimg.downscale_mean(result.linear_rgb, s)
+    hs, ws = lin.shape[:2]
+    face = result.face_mask[:hs * s:s, :ws * s:s]
+    lm_s = lm / np.float32(s)
+    bg_seed = module.person_prior((hs, ws), lm_s)[0] <= 0
+    fg_seed = module.foreground_seeds((hs, ws), lm_s, face)
+    if bg_seed.sum() < 50 or fg_seed.sum() < 50:
+        bg_seed = np.zeros((hs, ws), bool)
+        bg_seed[[0, -1], :] = bg_seed[:, [0, -1]] = True
+    wall = module.Matter._local_background(
+        lin, result.stats["matting"]["coarse_mask"], w / config.REF_WIDTH / s, bg_seed)
+    if s > 1:
+        wall = npimg.upsample_nearest(wall, s, (h, w))
+    combined = copy.copy(result)
+    combined.alpha = alpha
+    return color.encode_u8(matting.composite(combined, wall, np.ones(3, np.float32)))
+
+
 def sample_views(rgb, lm, ctx, fast):
     h, w = rgb.shape[:2]
     s = 2 if fast else 1
@@ -105,7 +129,7 @@ def sample_views(rgb, lm, ctx, fast):
     if old_bg.sum() < 50 or old_fg.sum() < 50:
         old_bg = np.zeros((hs, ws), bool)
         old_bg[[0, -1], :] = old_bg[:, [0, -1]] = True
-    _, _, clothing_fg, guard = matting.clothing_regions((hs, ws), lm_s)
+    _, _, clothing_fg, guard, _ = matting.clothing_regions((hs, ws), lm_s)
     guarded_bg = old_bg & ~guard
     stats = ctx.stats["matting"]
     if (clothing_fg.sum() != stats["clothing_samples"]
@@ -159,11 +183,19 @@ def main():
     parser.add_argument("--sample-figure", action="store_true",
                         help="also visualize sample candidates for shot2 and test5")
     parser.add_argument("--fba", action="store_true",
-                        help="compare full-frame FBA using baseline and improved-mask trimaps")
+                        help="compare FBA using Main and clothing-mask trimaps")
+    parser.add_argument("--schp", action="store_true",
+                        help="compare the offline SCHP clothing and whole-person priors")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     before_module = baseline_module(args.baseline)
+    previous_module = baseline_module(PREVIOUS_CLOTHING) if args.schp else None
+    schp = None
+    if args.schp:
+        from tools.schp_reference import SCHPReference
+
+        schp = SCHPReference()
     fba = None
     if args.fba:
         import torch
@@ -193,6 +225,17 @@ def main():
                 np.save(cache, lm)
             before, before_ms = process(before_module, rgb, lm, not args.full_grid)
             after, after_ms = process(matting, rgb, lm, not args.full_grid)
+            previous = None
+            garment_alpha = person_alpha = None
+            if schp is not None:
+                from tools.schp_reference import combine_with_main
+
+                previous, previous_ms = process(previous_module, rgb, lm, not args.full_grid)
+                start = time.perf_counter()
+                clothing_probability, background_probability = schp.predict(rgb)
+                schp_ms = 1000 * (time.perf_counter() - start)
+                garment_alpha, person_alpha = combine_with_main(
+                    before, lm, clothing_probability, background_probability)
             row = {
                 "photo": name, "baseline": args.baseline, "mode": "full-grid" if args.full_grid else "live",
                 "width": rgb.shape[1], "height": rgb.shape[0],
@@ -205,22 +248,27 @@ def main():
                 "clothing_background_samples": after.stats["matting"]["clothing_background_samples"],
                 "before_ms": before_ms, "after_ms": after_ms,
             }
+            if schp is not None:
+                row.update({
+                    "previous_clothing": PREVIOUS_CLOTHING,
+                    "previous_ms": previous_ms,
+                    "previous_clothing_samples": previous.stats["matting"]["clothing_samples"],
+                    "clothing_cropped": after.stats["matting"]["clothing_cropped"],
+                    "clothing_used_samples": after.stats["matting"]["clothing_used_samples"],
+                    "crop_vs_previous_added": int(((after.alpha > .5) & (previous.alpha <= .5)).sum()),
+                    "crop_vs_previous_removed": int(((previous.alpha > .5) & (after.alpha <= .5)).sum()),
+                    "schp_ms": schp_ms,
+                    "schp_clothing_vs_main_added": int(((garment_alpha > .5) & (before.alpha <= .5)).sum()),
+                    "schp_clothing_vs_main_removed": int(((before.alpha > .5) & (garment_alpha <= .5)).sum()),
+                    "schp_person_vs_main_added": int(((person_alpha > .5) & (before.alpha <= .5)).sum()),
+                    "schp_person_vs_main_removed": int(((before.alpha > .5) & (person_alpha <= .5)).sum()),
+                })
             if fba is not None:
                 trimap = fba_trimap(rgb, lm, before)
                 start = time.perf_counter()
                 prediction, tiles = fba.process(rgb, trimap, tile_size=1024, overlap=96)
                 fba_ms = 1000 * (time.perf_counter() - start)
                 fba_alpha = prediction[..., 0]
-                improved_trimap = fba_trimap(rgb, lm, after)
-                start = time.perf_counter()
-                combined, combined_tiles = fba.process(rgb, improved_trimap, tile_size=1024, overlap=96)
-                combined_ms = 1000 * (time.perf_counter() - start)
-                combined_alpha = combined[..., 0]
-                guarded_trimap = guarded_fba_trimap(rgb, trimap, improved_trimap, fba_alpha)
-                start = time.perf_counter()
-                guarded, guarded_tiles = fba.process(rgb, guarded_trimap, tile_size=1024, overlap=96)
-                guarded_ms = 1000 * (time.perf_counter() - start)
-                guarded_alpha = guarded[..., 0]
                 row.update({
                     "fba_trimap_foreground": int((trimap == 255).sum()),
                     "fba_trimap_background": int((trimap == 0).sum()),
@@ -228,6 +276,13 @@ def main():
                     "fba_added_pixels": int(((fba_alpha > .5) & (before.alpha <= .5)).sum()),
                     "fba_removed_pixels": int(((before.alpha > .5) & (fba_alpha <= .5)).sum()),
                     "fba_tiles": tiles, "fba_ms": fba_ms,
+                })
+                improved_trimap = fba_trimap(rgb, lm, after)
+                start = time.perf_counter()
+                combined, combined_tiles = fba.process(rgb, improved_trimap, tile_size=1024, overlap=96)
+                combined_ms = 1000 * (time.perf_counter() - start)
+                combined_alpha = combined[..., 0]
+                row.update({
                     "combined_trimap_foreground": int((improved_trimap == 255).sum()),
                     "combined_trimap_background": int((improved_trimap == 0).sum()),
                     "combined_trimap_unknown": int((improved_trimap == 128).sum()),
@@ -235,21 +290,38 @@ def main():
                     "combined_vs_fba_removed_pixels": int(((fba_alpha > .5) & (combined_alpha <= .5)).sum()),
                     "combined_vs_fba_mean_abs_alpha_difference": float(np.abs(combined_alpha - fba_alpha).mean()),
                     "combined_tiles": combined_tiles, "combined_ms": combined_ms,
-                    "guarded_promoted_foreground": int(((guarded_trimap == 255) & (trimap == 128)).sum()),
-                    "guarded_vs_fba_added_pixels": int(((guarded_alpha > .5) & (fba_alpha <= .5)).sum()),
-                    "guarded_vs_fba_removed_pixels": int(((fba_alpha > .5) & (guarded_alpha <= .5)).sum()),
-                    "guarded_vs_combined_added_pixels": int(((guarded_alpha > .5) & (combined_alpha <= .5)).sum()),
-                    "guarded_vs_combined_removed_pixels": int(((combined_alpha > .5) & (guarded_alpha <= .5)).sum()),
-                    "guarded_tiles": guarded_tiles, "guarded_ms": guarded_ms,
                 })
-                panels.append((name, rgb, color.encode_u8(before.output_frame),
-                               fba_composite(prediction), color.encode_u8(after.output_frame),
-                               fba_composite(combined), fba_composite(guarded)))
-                fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha,
-                                   guarded_trimap, guarded_alpha))
-            else:
+                if schp is None:
+                    guarded_trimap = guarded_fba_trimap(rgb, trimap, improved_trimap, fba_alpha)
+                    start = time.perf_counter()
+                    guarded, guarded_tiles = fba.process(rgb, guarded_trimap, tile_size=1024, overlap=96)
+                    guarded_ms = 1000 * (time.perf_counter() - start)
+                    guarded_alpha = guarded[..., 0]
+                    row.update({
+                        "guarded_promoted_foreground": int(((guarded_trimap == 255) & (trimap == 128)).sum()),
+                        "guarded_vs_fba_added_pixels": int(((guarded_alpha > .5) & (fba_alpha <= .5)).sum()),
+                        "guarded_vs_fba_removed_pixels": int(((fba_alpha > .5) & (guarded_alpha <= .5)).sum()),
+                        "guarded_vs_combined_added_pixels": int(((guarded_alpha > .5) & (combined_alpha <= .5)).sum()),
+                        "guarded_vs_combined_removed_pixels": int(((combined_alpha > .5) & (guarded_alpha <= .5)).sum()),
+                        "guarded_tiles": guarded_tiles, "guarded_ms": guarded_ms,
+                    })
+                    panels.append((name, rgb, color.encode_u8(before.output_frame),
+                                   fba_composite(prediction), color.encode_u8(after.output_frame),
+                                   fba_composite(combined), fba_composite(guarded)))
+                    fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha,
+                                       guarded_trimap, guarded_alpha))
+            elif schp is None:
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
                                color.encode_u8(after.output_frame), before.alpha, after.alpha))
+            if schp is not None:
+                fba_images = (fba_composite(prediction),) if fba is not None else ()
+                fba_combined = (fba_composite(combined),) if fba is not None else ()
+                panels.append((
+                    name, rgb, color.encode_u8(before.output_frame), *fba_images,
+                    color.encode_u8(previous.output_frame), color.encode_u8(after.output_frame),
+                    *fba_combined,
+                    composite_main_alpha(before_module, before, lm, garment_alpha, not args.full_grid),
+                    composite_main_alpha(before_module, before, lm, person_alpha, not args.full_grid)))
             rows.append(row)
             if args.sample_figure and name in ("shot2", "test5"):
                 sample_panels[name] = sample_views(rgb, lm, after, not args.full_grid)
@@ -262,7 +334,16 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    if fba is None:
+    if schp is not None:
+        titles = ["Original", "Main"]
+        if fba is not None:
+            titles.append("FBA")
+        titles += ["Previous clothing", "Clothing (NumPy)"]
+        if fba is not None:
+            titles.append("NumPy + FBA")
+        titles += ["Main + SCHP clothing", "Main + SCHP person"]
+        write_sheets(panels, titles, "comparison", args.out)
+    elif fba is None:
         write_sheets(panels, ["Original", "Main", "Clothing improvement",
                               "Main alpha", "Clothing improvement alpha"], "comparison", args.out)
     else:

@@ -46,7 +46,7 @@ def test_clothing_recovery_keeps_outer_fabric_without_filling_the_gate(kind, fas
 
 def test_clothing_sampling_guard_excludes_out_of_gate_white_sleeves():
     rgb, lm, _, target = clothing_scene("white")
-    gate, _, _, guard = matting.clothing_regions(target.shape, lm)
+    gate, _, _, guard, _ = matting.clothing_regions(target.shape, lm)
     old_bg = matting.person_prior(target.shape, lm)[0] <= 0
     assert (old_bg & target).any()
     assert not (old_bg & ~guard & target).any()
@@ -70,6 +70,55 @@ def test_clothing_models_skip_cropped_chest_and_reset_warm_state():
 
 
 @pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
+def test_cropped_chest_recovers_jacket_without_learning_wall_samples(fast):
+    from idphoto.relight import Relighter
+
+    rgb, lm, person, target = clothing_scene("jacket")
+    f = matting.face_measures(lm)
+    h = int(f["chin"][1] + 0.55 * f["ec"])
+    rgb, person, target = rgb[:h].copy(), person[:h].copy(), target[:h].copy()
+    yy, xx = np.mgrid[:h, :rgb.shape[1]] + 0.5
+    wall = ((yy > f["chin"][1] + 0.42 * f["ec"])
+            & (xx > f["cx"] + 0.5 * f["fw"]) & (xx < f["cx"] + 0.85 * f["fw"]))
+    rgb[wall] = rgb[0, 0]
+    person[wall] = target[wall] = False
+
+    ctx = make_ctx(rgb, lm)
+    Relighter().process(ctx, strength=0.0)
+    matting.Matter().process(ctx, fast=fast, update=False)
+    stats = ctx.stats["matting"]
+    assert stats["clothing_cropped"] and stats["clothing_applied"]
+    assert 50 <= stats["clothing_used_samples"] < stats["clothing_samples"]
+    assert (ctx.alpha[target] > 0.5).mean() > 0.9
+    assert ((ctx.alpha > 0.5) & ~person).mean() < 0.005
+
+
+@pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
+def test_cropped_chest_skips_when_all_side_samples_match_background(fast):
+    from idphoto.relight import Relighter
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    matter = matting.Matter()
+    initial = make_ctx(rgb, lm)
+    Relighter().process(initial, strength=0.0)
+    matter.process(initial, fast=fast)
+    assert matter.clothing_bg is not None and matter.clothing_fg is not None
+
+    f = matting.face_measures(lm)
+    h = int(f["chin"][1] + 0.55 * f["ec"])
+    rgb = rgb[:h].copy()
+    rgb[int(f["chin"][1] + 0.1 * f["ec"]):] = rgb[0, 0]
+
+    ctx = make_ctx(rgb, lm)
+    Relighter().process(ctx, strength=0.0)
+    matter.process(ctx, fast=fast)
+    stats = ctx.stats["matting"]
+    assert stats["clothing_cropped"] and not stats["clothing_applied"]
+    assert stats["clothing_used_samples"] < 50
+    assert matter.clothing_bg is matter.clothing_fg is None
+
+
+@pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
 def test_clothing_sample_views_show_the_guard_and_candidates(fast):
     from idphoto.relight import Relighter
     from tools.eval_clothing import sample_views
@@ -84,7 +133,7 @@ def test_clothing_sample_views_show_the_guard_and_candidates(fast):
     shape = (rgb.shape[0] // s, rgb.shape[1] // s)
     lm_s = lm / np.float32(s)
     old_bg = matting.person_prior(shape, lm_s)[0] <= 0
-    _, _, clothing_fg, guard = matting.clothing_regions(shape, lm_s)
+    _, _, clothing_fg, guard, _ = matting.clothing_regions(shape, lm_s)
     excluded = npimg.upsample_nearest(old_bg & guard, s, rgb.shape[:2])
     candidates = npimg.upsample_nearest(clothing_fg, s, rgb.shape[:2])
     assert excluded.any() and candidates.any()
@@ -111,7 +160,7 @@ def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
     border[[0, -1], :] = border[:, [0, -1]] = True
     monkeypatch.setattr(matting, "person_prior", lambda *_: (np.ones(shape), None))
     monkeypatch.setattr(matting, "foreground_seeds", lambda *_: np.ones(shape, bool))
-    monkeypatch.setattr(matting, "clothing_regions", lambda *_: (None, None, clothing_fg, guard))
+    monkeypatch.setattr(matting, "clothing_regions", lambda *_: (None, None, clothing_fg, guard, False))
     ctx = FrameContext(raw_frame=rgb, landmarks=lm)
     ctx.stats["matting"] = {"clothing_samples": int(clothing_fg.sum()),
                             "clothing_background_samples": int((border & ~guard).sum())}
@@ -120,7 +169,7 @@ def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
     assert np.array_equal(np.any(old_view != guarded_view, axis=2), border & guard)
 
 
-@pytest.mark.parametrize("columns", [3, 5, 6, 7])
+@pytest.mark.parametrize("columns", [3, 5, 6, 7, 8])
 def test_clothing_sheet_shows_representative_jacket_and_other_photos_together(
         tmp_path, monkeypatch, columns):
     from matplotlib.figure import Figure
