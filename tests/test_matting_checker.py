@@ -1,10 +1,72 @@
 import numpy as np
 import pytest
 
-from idphoto import synthetic
+from idphoto import matting, synthetic
 from idphoto.checker import AutoShutter
 
-from .conftest import FRONT, SIDE, run_pipeline
+from .conftest import FRONT, SIDE, make_ctx, run_pipeline
+
+
+def clothing_scene(kind):
+    rgb, lm, person = synthetic.render(
+        synthetic.Scene(width=320, height=280, noise=0, **FRONT))
+    f = matting.face_measures(lm)
+    yy, xx = np.mgrid[:280, :320] + 0.5
+    dx, ec, fw, chin_y = np.abs(xx - f["cx"]), f["ec"], f["fw"], f["chin"][1]
+    half = (0.55 + 1.7 * np.sqrt(np.clip((yy - chin_y - 0.25 * ec) / ec, 0, 1))) * fw
+    body = (yy > chin_y + 0.25 * ec) & (dx < half)
+    if kind == "jacket":
+        rgb[body] = [90, 104, 75]
+        rgb[body & (dx < 0.78 * fw)] = [24, 28, 30]
+        target = body & (dx >= 0.78 * fw)
+    elif kind == "white":
+        rgb[body] = [230, 235, 240]
+        target = body & (matting.person_prior(body.shape, lm)[0] < 0.05)
+    else:
+        rgb[body] = [25, 26, 27]
+        rgb[(xx < 20) & (yy > 80) & (yy < 130)] = [27, 26, 25]
+        target = body
+    return rgb, lm, person | body, target
+
+
+@pytest.mark.parametrize("kind", ["jacket", "white", "dark"])
+@pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
+def test_clothing_recovery_keeps_outer_fabric_without_filling_the_gate(kind, fast):
+    from idphoto.relight import Relighter
+
+    rgb, lm, person, target = clothing_scene(kind)
+    ctx = make_ctx(rgb, lm)
+    Relighter().process(ctx, strength=0.0)
+    matting.Matter().process(ctx, fast=fast)
+    assert ctx.stats["matting"]["clothing_applied"]
+    assert (ctx.alpha[target] > 0.5).mean() > 0.98
+    assert ((ctx.alpha > 0.5) & ~person).mean() < 0.005
+    assert np.all(ctx.alpha[ctx.face_mask] == 1.0)
+
+
+def test_clothing_sampling_guard_excludes_out_of_gate_white_sleeves():
+    rgb, lm, _, target = clothing_scene("white")
+    gate, _, _, guard = matting.clothing_regions(target.shape, lm)
+    old_bg = matting.person_prior(target.shape, lm)[0] <= 0
+    assert (old_bg & target).any()
+    assert not (old_bg & ~guard & target).any()
+    assert (gate[target] > 0.05).all()
+
+
+def test_clothing_models_skip_cropped_chest_and_reset_warm_state():
+    from idphoto.relight import Relighter
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    matter = matting.Matter()
+    for frame in (rgb, rgb, rgb[:180]):
+        ctx = make_ctx(frame, lm)
+        Relighter().process(ctx, strength=0.0)
+        matter.process(ctx)
+    assert not ctx.stats["matting"]["clothing_applied"]
+    assert ctx.stats["matting"]["clothing_samples"] < 50
+    assert matter.clothing_bg is matter.clothing_fg is None
+    matter.reset()
+    assert matter.bg is matter.fg is None
 
 
 @pytest.mark.parametrize("scene", [

@@ -1,3 +1,183 @@
+[English](README.md) | [한국어](README_kr.md)
+
+# Module B experiment: recovering clothing
+
+## All twelve photos: results first
+
+**The extra clothing model recovers missing fabric, but does not solve general portrait segmentation.**
+These photographs have **no ground-truth masks**. Added mask pixels below are change counts at
+alpha > 0.5, **not accuracy, recall, or confirmed clothing pixels**. Some additions are background.
+All observations refer to image-left/image-right, not the sitter's left/right.
+
+| Photo | Added pixels, live | Observation and remaining failure |
+|---|---:|---|
+| shot2 | 15,927 | Much more khaki jacket; outer sleeves and a small bright hole still missing. |
+| shot3 | 7,916 | More jacket on both sides; substantial left sleeve still missing. |
+| shot4 | 6,699 | More outer jacket; right-side room clutter is still retained. |
+| shot5 | 0 | Unchanged failure: the close-up leaves no chest samples in frame, so recovery is skipped. |
+| test1 | 26,880 | More black patterned top; large shoulder gaps and dark-room leakage remain. |
+| test2 | 15,067 | More patterned top; dark objects remain joined at the sides. |
+| test3 | 7,138 | More gray shirt near the neck/shoulder; a notch near the neck remains. |
+| test4 | 7,185 | More gray shirt near the shoulder; blue object and dark side clutter remain. |
+| test5 | 12,618 | Right white shoulder is recovered; left-side wall strip remains foreground. |
+| test6 | 11,753 | More outer white shirt; wall behind the shoulders is also added, a regression. |
+| test8 | 15,664 | Outer black sleeves recovered; collar notches and blocky edges remain. |
+| test9 | 34,428 | More dark hoodie; shadow-side gaps and dark background attachment remain. |
+
+Baseline: main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`.
+Input width is 640 px, relighting strength is zero to isolate Module B, background is white,
+models start cold, and landmarks are identical within each before/after pair.
+The columns are **input / before composite / after composite / before alpha / after alpha**.
+Labels are outside the photographs; no text is painted over them.
+
+### Jackets: shot2, shot3, shot4, shot5
+
+![All jacket photos, before and after](docs/evaluation/clothing/comparison-1.jpg)
+
+### Dark room: test1, test2, test3, test4
+
+![All dark-room photos, before and after](docs/evaluation/clothing/comparison-2.jpg)
+
+### Other backgrounds: test5, test6, test8, test9
+
+![All other photos, before and after](docs/evaluation/clothing/comparison-3.jpg)
+
+The [live measurements](docs/evaluation/clothing/measurements.csv) record all 12 photos,
+including skip status, available seed counts, thresholds, and single-run matting times.
+Across the set, 161,275 pixels cross upward through alpha 0.5 and 9 cross downward.
+Recovery only adds to the binary mask **before** cleanup; guided-filter recomputation can still
+move a few existing edge pixels below 0.5. More mask area is not evidence of better segmentation.
+
+The shutter algorithm was also run with `s=1` on the **same 640-px inputs**, rather than the
+live algorithm's `s=2`: [measurements](docs/evaluation/clothing/full-grid/measurements.csv),
+[jackets](docs/evaluation/clothing/full-grid/comparison-1.jpg),
+[dark room](docs/evaluation/clothing/full-grid/comparison-2.jpg),
+[other backgrounds](docs/evaluation/clothing/full-grid/comparison-3.jpg).
+It adds 122,211 pixels and removes 6 at alpha 0.5. Differences are substantial:
+shot2/shot4 retain fragmented shoulders, while shot3 improves more than in live mode.
+**These are not original-resolution export results**, and not a claim that live and saved
+edges match. The application's rule-7 fallback can keep the original wall on export;
+the comparison deliberately displays the requested white composite even on a failed cutout.
+
+## Motivation and diagnosis
+
+If the existing matting method is unfamiliar, first read the
+[Module B matting README](https://github.com/hanbin5/relight/blob/module-b/matting/README.md)
+([Korean](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)).
+This report covers only the clothing experiment, not that entire pipeline.
+
+The old gate serves two incompatible purposes: the person cannot exist beyond it, and every
+pixel beyond it is eligible to train the wall model. A sleeve that slightly exceeds the
+assumed shoulder shape can therefore both be excluded and teach the model that its fabric
+is background. A color already assigned to a dark object elsewhere in the room can also
+outvote dark clothing. Finally, the old foreground samples mix face, hair, neck, and a narrow
+chest. A black inner top can dominate that chest, leaving the khaki outer jacket unrepresented.
+Color evidence and the Otsu threshold can then defeat the torso's 0.7 prior.
+
+These are mechanisms confirmed with the code and controlled synthetic scenes below.
+Earlier reports about particular photo pixels were diagnostic observations, not annotations;
+they were not reused as ground truth or reported as measured accuracy here.
+
+## Experiments and selected method
+
+| Experiment | Motivation | Observed result / decision |
+|---|---|---|
+| Widen global chest samples and move the global shoulder gate upward | Represent jackets and protect shoulders from wall sampling | More fabric, but retrained background/foreground models and changed Otsu also altered hair in shot3/test9. Rejected. |
+| Separate clothing models with guarded background samples | Improve the body without retraining the head model | Restores the jacket in shot2 and white shoulder in test5; selected. |
+| Tighten clothing shade scaling and require a supported clothing color | Avoid explaining a darker wall as shaded white fabric, or accepting colors unseen by either model | Limits additions, but cannot eliminate test6 wall leakage. Selected with this limitation. |
+| Add supported clothing instead of replacing existing body labels | Avoid new holes in collars and patterned fabric | Preserves existing foreground before morphology, but also preserves existing false foreground. Selected. |
+
+Only NumPy processing is added. There is no segmentation model, depth model, calibration frame,
+manual per-photo ROI, OpenCV processing, or photo-specific name/threshold in the app.
+
+The separate models are warmed across frames and cleared by `Matter.reset()`. If fewer than
+50 foreground or protected-background pixels are available on the processing grid, this
+additional pass is skipped and its cached models are cleared on an updating frame.
+The skip and both counts are exposed in `ctx.stats["matting"]`; a frame-border sampling
+fallback is **not** used to train the extra clothing model.
+
+### Settings
+
+Distances below use the existing landmark-derived face width (`fw`), eye-to-chin length
+(`ec`), and midline. They scale with the frame, not with a particular photograph.
+
+| Setting | Value |
+|---|---|
+| Clothing search start | Chin + 0.2 ec |
+| Shoulder widening | Square-root progression over 0.8 ec; half-width 0.6 fw to 2.8 fw |
+| Gate fade | 0.25 fw outside that half-width |
+| Background guard | Below chin, exclude the half-width plus 0.6 fw from old background seeds |
+| Clothing samples | Chin + 0.65 ec through chin + 2.5 ec; tapered half-width 0.35 fw to 1.0 fw |
+| Sampling taper | Square-root progression over 1 ec after chin + 0.65 ec |
+| Clothing prior | 0.5 at the margin to existing `PRIOR_TORSO=0.7` in the inner torso |
+| Neck protection | Recover below chin + 0.65 ec, or farther than 0.45 fw from the midline |
+| Color models | Existing 8 background / 5 foreground clusters, at most 2,000 samples each |
+| Sampling RNG seeds | 3 for clothing background, 4 for clothing foreground |
+| Cold / warm k-means | 8 / 3 iterations, as in the original models |
+| Clothing shade scale | 0.8 to 1.2 in linear intensity; square root for the color-distance calculation |
+| Supported color | Foreground distance strictly below existing `OUTLIER_DISTANCE=2.5` |
+| Score cutoff | Original frame's Otsu threshold, still clipped to 0.35 through 0.65 |
+| Cleanup, refinement | Existing opening, closing, face connectivity, holes and guided filter unchanged |
+
+The guarded background model is for **clothing scoring only**. Head models, wall statistics,
+plain-wall check, and local-spill estimation retain their original definitions. In particular,
+this does not claim to purify all background estimates throughout the old pipeline.
+
+## Controlled regressions
+
+The tests render a known face and construct wider, earlier shoulders. These synthetic masks
+are known exactly, unlike the real photographs. Both live and shutter-grid paths are tested.
+
+| Synthetic target | Target pixels | Baseline retention, live / full grid | After retention, both |
+|---|---:|---:|---:|
+| Khaki jacket outside a black inner top | 13,932 | 0% / 0% | 100% |
+| White sleeve pixels outside the old gate | 658 | 0% / 0% | 100% |
+| Dark top with separate dark room clutter | 26,304 | 95.38% / 95.15% | 100% |
+
+After recovery, false foreground in these controlled scenes occupies about 0.013% to 0.016%
+of the **whole image**, not of the background. Assertions require target retention above 98%
+and false foreground below 0.5% of the image. Additional tests cover the sampling guard and
+warm-state clearing when the chest is cropped. These simple scenes establish the repaired
+mechanisms; they do not establish real-world accuracy or solve identical fabric/wall colors.
+
+## Reproduce
+
+```bash
+uv sync --group dev
+uv run python tools/fetch_model.py
+uv run python tools/eval_clothing.py
+uv run python tools/eval_clothing.py --full-grid --out docs/evaluation/clothing/full-grid
+uv run pytest tests/test_matting_checker.py -q
+uv run pytest -q
+```
+
+The first evaluation writes the three live comparison sheets and `measurements.csv`.
+The second writes the same twelve comparisons for the full-grid algorithm.
+The default baseline is the fixed main SHA above; `--baseline SHA` overrides it.
+The tool loads that revision's matting implementation and uses unchanged common settings.
+Cached image-mode landmarks live in `out/clothing-landmarks/`; choose a fresh `--cache`
+directory to detect them again. A missing image or missing face is an error, never silently skipped.
+`test9.jpg` was restored unchanged from commit `e8e798c8eee3118bebba4ba8f34c37808f84c250`
+on `module-b/person-prior`; no other code from that branch is included.
+
+Validation on this branch: **198 tests passed**, including **28 matting/checker tests**.
+The CSV timings are single cold-run diagnostics on mixed image heights, not a latency or
+10-fps claim. Original-resolution rendering, sustained webcam performance, landmark jitter,
+and warm-start real-photo sequences were not evaluated in this experiment.
+
+## Limits and consequence
+
+This is a bounded clothing-recovery improvement, **not a generally clean cutout**.
+It cannot infer an unseen jacket from a close-up with no chest samples (shot5), reliably
+separate equal-colored room objects from fabric (test1/test2/test9), remove the old left-wall
+strip (test5), or avoid every newly attached background region (test6).
+Assumed anatomy can fail on crossed arms, unusual posture, or an occluded chest.
+The existing checker and original-wall export fallback remain necessary.
+Hand-drawn masks and temporal/original-resolution evaluation are still required before
+making accuracy or production-readiness claims.
+
+---
+
 # ID Photo: webcam ID photos with live relighting
 
 A Python desktop app that turns a webcam session into résumé (3 × 4 cm), student or employee ID (3.5 × 4.5 cm) and square profile photos, plus 6 × 4 in print sheets. Every frame is relit to an even light from the face mesh, the background is replaced, and seven checks run before the shutter. The plan, formulas and thresholds are in [docs/id-photo-survey-plan-v2.md](docs/id-photo-survey-plan-v2.md).
@@ -87,7 +267,7 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (190 tests, about 15 s).
+Tests: `uv run pytest` (198 tests, about 15 s).
 
 ## Results so far
 

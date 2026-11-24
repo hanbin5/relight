@@ -1,0 +1,123 @@
+"""Compare Module B against a fixed Git revision on the twelve evaluation photos."""
+
+import argparse
+import csv
+import subprocess
+import time
+import types
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from idphoto import color, matting
+from idphoto.context import FrameContext
+from idphoto.landmarks import FaceLandmarkDetector
+from idphoto.pipeline import to_live
+from idphoto.relight import Relighter
+
+ROOT = Path(__file__).resolve().parents[1]
+BASELINE = "e96bb08cb678634207ea3aa45f086152c4c96f11"
+NAMES = ["shot2", "shot3", "shot4", "shot5", "test1", "test2",
+         "test3", "test4", "test5", "test6", "test8", "test9"]
+
+
+def baseline_module(ref):
+    source = subprocess.check_output(
+        ["git", "show", f"{ref}:idphoto/matting.py"], cwd=ROOT, text=True)
+    module = types.ModuleType("idphoto._clothing_baseline")
+    module.__package__ = "idphoto"
+    exec(compile(source, f"{ref}:idphoto/matting.py", "exec"), module.__dict__)
+    return module
+
+
+def process(module, rgb, lm, fast):
+    ctx = FrameContext(raw_frame=rgb, landmarks=lm.copy())
+    ctx.linear_rgb = color.decode_u8(rgb)
+    ctx.Y = color.luminance(ctx.linear_rgb)
+    Relighter().process(ctx, strength=0.0)
+    start = time.perf_counter()
+    module.Matter().process(ctx, np.ones(3, np.float32), update=False, fast=fast)
+    return ctx, 1000 * (time.perf_counter() - start)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", default=BASELINE)
+    parser.add_argument("--out", type=Path, default=ROOT / "docs/evaluation/clothing")
+    parser.add_argument("--cache", type=Path, default=ROOT / "out/clothing-landmarks")
+    parser.add_argument("--full-grid", action="store_true",
+                        help="shutter algorithm (s=1) on the same 640-px input, not original resolution")
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+    args.cache.mkdir(parents=True, exist_ok=True)
+    before_module = baseline_module(args.baseline)
+    rows, panels = [], []
+    detector = None
+    try:
+        for name in NAMES:
+            path = ROOT / "docs/evaluation/test" / f"{name}.jpg"
+            bgr = cv2.imread(str(path))
+            if bgr is None:
+                raise FileNotFoundError(path)
+            rgb = bgr[..., ::-1].copy()
+            rgb, _ = to_live(rgb)
+            cache = args.cache / f"{name}-live.npy"
+            if cache.exists():
+                lm = np.load(cache)
+            else:
+                if detector is None:
+                    detector = FaceLandmarkDetector(video=False)
+                lm = detector.detect(rgb)
+                if lm is None:
+                    raise RuntimeError(f"No face detected: {path}")
+                np.save(cache, lm)
+            before, before_ms = process(before_module, rgb, lm, not args.full_grid)
+            after, after_ms = process(matting, rgb, lm, not args.full_grid)
+            row = {
+                "photo": name, "baseline": args.baseline, "mode": "full-grid" if args.full_grid else "live",
+                "width": rgb.shape[1], "height": rgb.shape[0],
+                "before_threshold": before.stats["matting"]["threshold"],
+                "after_threshold": after.stats["matting"]["threshold"],
+                "added_pixels": int(((after.alpha > .5) & (before.alpha <= .5)).sum()),
+                "removed_pixels": int(((before.alpha > .5) & (after.alpha <= .5)).sum()),
+                "clothing_applied": after.stats["matting"]["clothing_applied"],
+                "clothing_samples": after.stats["matting"]["clothing_samples"],
+                "clothing_background_samples": after.stats["matting"]["clothing_background_samples"],
+                "before_ms": before_ms, "after_ms": after_ms,
+            }
+            rows.append(row)
+            panels.append((name, rgb, color.encode_u8(before.output_frame),
+                           color.encode_u8(after.output_frame), before.alpha, after.alpha))
+            print(row, flush=True)
+    finally:
+        if detector is not None:
+            detector.close()
+    with (args.out / "measurements.csv").open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    titles = ["Input", "Before: white background", "After: white background",
+              "Before: alpha", "After: alpha"]
+    for page in range(3):
+        fig, axes = plt.subplots(4, 5, figsize=(15, 10), layout="constrained")
+        for r, (name, *images) in enumerate(panels[page * 4:page * 4 + 4]):
+            for c, image in enumerate(images):
+                axes[r, c].imshow(image, cmap="gray", vmin=0, vmax=1 if c >= 3 else 255)
+                axes[r, c].set_xticks([])
+                axes[r, c].set_yticks([])
+                if r == 0:
+                    axes[r, c].set_title(titles[c], fontsize=10)
+                if c == 0:
+                    axes[r, c].set_ylabel(name)
+        fig.savefig(args.out / f"comparison-{page + 1}.jpg", dpi=130)
+        plt.close(fig)
+
+
+if __name__ == "__main__":
+    main()
