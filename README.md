@@ -286,6 +286,46 @@ Three simple synthetic scenes cannot generalize performance on real photos. For 
 
 The comparison methods are [Closed-Form Matting](https://webee.technion.ac.il/people/anat.levin/), [KNN Matting](https://dingzeyu.li/projects/knn/), and learned [F, B, Alpha Matting](https://arxiv.org/abs/2003.07711) (FBA). The first two use [PyMatting](https://pymatting.github.io/); FBA uses [the authors' public implementation and weights](https://github.com/MarcoForte/FBA_Matting). Deep Image Matting was not run in this experiment.
 
+### How the Hair/Head Matte Is Made
+
+This offline experiment turns the existing rough person mask into a **head matte that includes the face**, not a hair-only semantic mask. The stages below show why each step is used:
+
+1. **Start with a rough person mask.** Face landmarks guide the existing `Matter.process` algorithm, which estimates an initial alpha from face/foreground and background colors. This gives us a starting outline, but its person prior can miss hair or clothing.
+2. **Crop the head at original resolution.** The landmarks define a generous head region in the original photo. We crop those pixels without shrinking them so fine strands are still present for matting.
+3. **Tell the model what is certain.** The initial alpha is used to make a trimap: white is sure foreground, black is sure background, and gray is the area left for the model. Eroding the rough person region avoids labeling uncertain edges as definite; expanding it leaves room for hair. Because the trimap comes from the existing mask, the old prior still affects the result.
+
+   ![The existing rough mask expanded into wide and narrow trimaps](docs/module-b/fba-alpha-refinement/test5-trimaps.png)
+
+   *Left to right: thresholded initial mask, wide trimap, and narrow trimap. White = sure foreground; black = sure background; gray = unknown.*
+
+4. **Estimate a soft edge.** FBA (Foreground, Background, Alpha) is a learned model that estimates foreground color, background color, and alpha together from the crop and trimap. Alpha is the blend amount: 0 means background, 1 means foreground, and values between them preserve partially covered pixels such as fine strands. The wide trimap can retain hair, but may also leave a broad haze from the wall.
+
+   ![Original-resolution hair detail: wide and narrow FBA, then the refined result](docs/module-b/fba-alpha-refinement/test5-crown-detail.jpg)
+
+   *Top: original crop and recovered foreground color from wide FBA, narrow FBA, and post-processing. Bottom: their alpha mattes in the same order.*
+
+5. **Reduce broad haze without cutting to a fixed silhouette.** With the wide trimap unchanged, post-processing protects pixels whose recovered foreground color matches nearby opaque person pixels or whose alpha is already high. It then reduces only the broad local alpha floor where that evidence is weak, and removes alpha regions disconnected from sure foreground. This is a conservative image-based correction, not hair recognition.
+
+   ![Color and opacity evidence used to protect pixels](docs/module-b/fba-alpha-refinement/test5-protection-stages.jpg)
+
+   *Left to right: crop, input alpha, color match, opacity protection, and combined protection. In the heat maps, darker means weaker protection and yellow means stronger protection.*
+
+   ![Local alpha floor and the amount removed before connectivity cleanup](docs/module-b/fba-alpha-refinement/test5-alpha-reduction.jpg)
+
+   *Left to right: crop, input alpha, local minimum, amount subtracted, and alpha before connectivity cleanup. Yellow marks more attenuation; some fine strands also weaken.*
+
+   ![The small effect of connectivity cleanup in an 8× detail](docs/module-b/fba-alpha-refinement/test5-connectivity-cleanup.jpg)
+
+   *Left to right: alpha before cleanup, removed pixels in magenta, and alpha after cleanup. Only 701 of about 3.88 million candidate pixels (0.02%) were removed in this test.*
+
+6. **Compare the result.** The final head matte keeps many flyaway strands while reducing some wall texture, but neither the crop nor the model guarantees that every strand is kept or every background mark removed.
+
+   ![Full test5 comparison of the baseline, FBA mattes, and post-processed result](docs/module-b/fba-alpha-refinement/test5-comparison.jpg)
+
+   *Top row: native head crop and composites. Bottom row: the wide trimap, baseline alpha, wide FBA, narrow FBA, and post-processed wide-FBA alpha.*
+
+The steps and pictures document this local experiment; it is **not integrated into the app**. The crop can exclude long hair, and hair incorrectly marked as sure background cannot be recovered. The detailed trimap settings, reproduction commands, output files, observed limitations, and FBA weight-license restriction are described in the sections below.
+
 ### Run
 
 The FBA authors' code is MIT-licensed, but **the public weights may be used for noncommercial purposes only.** This must not be interpreted as a license that permits product use. The commands below download external code and about 139 MB of weights after this restriction is acknowledged. Photos are not uploaded; inference runs locally. The model and outputs are saved under ignored `models/` and `out/` directories, respectively.
