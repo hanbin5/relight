@@ -120,6 +120,108 @@ def test_clothing_sample_views_show_frame_border_fallback(monkeypatch):
     assert np.array_equal(np.any(old_view != guarded_view, axis=2), border & guard)
 
 
+def test_fba_trimap_keeps_a_wide_unknown_band_around_the_whole_person():
+    from types import SimpleNamespace
+
+    from tools.eval_clothing import fba_trimap
+
+    rgb, lm, _, target = clothing_scene("white")
+    alpha = np.zeros(rgb.shape[:2], np.float32)
+    alpha[60:250, 100:220] = 1
+    face = np.zeros_like(alpha, dtype=bool)
+    face[58, 145] = True
+    before = SimpleNamespace(alpha=alpha, face_mask=face)
+    trimap = fba_trimap(rgb, lm, before)
+
+    assert trimap.shape == rgb.shape[:2]
+    assert trimap[200, 150] == 255
+    assert trimap[58, 145] == 255
+    assert trimap[200, 95] == 128
+    assert trimap[0, 0] == 0
+    fw = matting.face_measures(lm)["fw"]
+    outside_band = target & ~npimg.dilate(alpha > 0.5, max(1, round(0.5 * fw)))
+    assert outside_band.any()
+    assert (trimap[outside_band] == 128).all()
+    with pytest.raises(ValueError, match="both known"):
+        fba_trimap(rgb, lm, SimpleNamespace(alpha=np.ones_like(alpha), face_mask=face))
+    alpha[0, 0] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        fba_trimap(rgb, lm, before)
+
+
+def test_fba_tiles_keep_resolution_and_respect_known_trimap_regions():
+    from tools.fba_reference import native_tiles
+
+    rgb = np.zeros((48, 64, 3), np.uint8)
+    rgb[..., 0] = np.arange(64)
+    trimap = np.full(rgb.shape[:2], 128, np.uint8)
+    trimap[:, :24], trimap[:, 40:] = 0, 255
+    calls = []
+
+    def predict(image, labels):
+        calls.append(image.shape)
+        output = np.empty((*labels.shape, 7), np.float32)
+        output[..., 0] = image[..., 0] / 255
+        output[..., 1:4] = image / 255
+        output[..., 4:7] = 1 - image / 255
+        return output
+
+    output, count = native_tiles(rgb, trimap, predict, tile_size=32, overlap=8)
+    unknown = trimap == 128
+    np.testing.assert_allclose(output[..., 0][unknown], rgb[..., 0][unknown] / 255, atol=1e-6)
+    np.testing.assert_array_equal(output[..., 0][trimap == 0], 0)
+    np.testing.assert_array_equal(output[..., 0][trimap == 255], 1)
+    np.testing.assert_allclose(output[..., 1:4][trimap == 255], rgb[trimap == 255] / 255, atol=1e-7)
+    assert count == len(calls) > 1
+    assert all(max(shape[:2]) <= 32 for shape in calls)
+
+
+def test_fba_missing_assets_fail_explicitly(tmp_path):
+    from tools.fba_reference import verify_assets
+
+    with pytest.raises(FileNotFoundError, match="accept-noncommercial"):
+        verify_assets(tmp_path)
+
+
+def test_fba_download_requires_noncommercial_acknowledgment(monkeypatch):
+    import sys
+
+    from tools import fba_reference
+
+    fetched = []
+    monkeypatch.setattr(fba_reference, "fetch_assets", lambda: fetched.append(True))
+    monkeypatch.setattr(sys, "argv", ["fba_reference.py"])
+    with pytest.raises(SystemExit):
+        fba_reference.main()
+    assert not fetched
+    monkeypatch.setattr(sys, "argv", ["fba_reference.py", "--accept-noncommercial"])
+    assert fba_reference.main() == 0
+    assert fetched == [True]
+
+
+def test_fba_official_weights_run_on_cpu_at_input_resolution():
+    from tools.fba_reference import ASSETS, FBAReference
+
+    if not (ASSETS / "FBA.pth").exists():
+        pytest.skip("download FBA research weights")
+    torch = pytest.importorskip("torch")
+    threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(2)
+        rgb = np.zeros((47, 61, 3), np.uint8)
+        rgb[..., :] = np.linspace(20, 230, 61).astype(np.uint8)[None, :, None]
+        trimap = np.full(rgb.shape[:2], 128, np.uint8)
+        trimap[:, :24], trimap[:, 37:] = 0, 255
+        output, count = FBAReference().process(rgb, trimap, tile_size=64, overlap=8)
+        assert output.shape == (*trimap.shape, 7) and count == 1
+        assert np.isfinite(output).all()
+        np.testing.assert_array_equal(output[..., 0][trimap == 0], 0)
+        np.testing.assert_array_equal(output[..., 0][trimap == 255], 1)
+        assert ((output[..., 0][trimap == 128] > 0) & (output[..., 0][trimap == 128] < 1)).any()
+    finally:
+        torch.set_num_threads(threads)
+
+
 @pytest.mark.parametrize("scene", [
     synthetic.Scene(**FRONT),
     synthetic.Scene(**SIDE),

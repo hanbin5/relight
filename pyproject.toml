@@ -16,6 +16,12 @@ dependencies = [
 [project.scripts]
 idphoto = "idphoto.gui:main"
 
+[project.optional-dependencies]
+fba = [
+    "gdown>=5.2",
+    "torch>=2.6",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
