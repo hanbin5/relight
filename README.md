@@ -6,6 +6,39 @@ If you have not read how the existing background-separation pipeline works, read
 
 The terms used below are brief reminders: the **person prior** is the existing face-landmark-based assumption about where a person can be; the **existing alpha** is its rough person/background mask; and a **trimap** marks sure foreground, sure background, and pixels left for a matting method to decide. These terms refer to the prior, alpha, and boundary stages in the overview.
 
+## Full-Dataset Evaluation (12 Unique Photos)
+
+We enumerated `docs/evaluation/test` and found 12 unique photos. The four files in `docs/evaluation/crown-crop/originals/` are byte-identical copies of `shot2`–`shot5`, not additional cases.
+
+All 12 photos completed all runs without runtime errors. The full-frame comparison used the existing method, GrabCut, and Random Walker on the same photo resized to a maximum long edge of 480 px. GrabCut and Random Walker shared automatically generated seeds; the existing method retained its own samples and prior. GrabCut used 5 iterations, and Random Walker used beta 130, `cg_j`, tolerance `1e-6`, and a foreground threshold of 0.5. The head-matting run used the existing landmarks and alpha to create an original-resolution head crop and default wide trimap (`--band 0.25`), then FBA with 768 px tiles, 96 px overlap, and 4 CPU threads, followed by `refine_hair.py`. This produces a head matte including the face, not a full-body mask.
+
+**None of these real photos has a ground-truth mask.** Foreground shares below are only the fraction of working-image pixels marked foreground; they are not accuracy scores. The last numeric column is the percentage decrease in the sum of FBA alpha across the entire head crop after post-processing, not the percentage of errors removed. In these 12 photos it has a median of 0.35% and a range of 0.04–1.75%; a visible change in one selected patch does not imply a comparable whole-image improvement. Median FBA inference took 0.59 s (0.29–11.93 s), and post-processing took 0.038 s (0.019–0.408 s); these are CPU timings, not quality scores.
+
+![Full-frame comparison for all 12 photos: input, existing mask, GrabCut, and Random Walker](docs/evaluation/full-dataset-person-prior.jpg)
+
+*Rows are the 12 photos. For each method, the original is composited with that method's binary mask over the same blue background. The visual comparison is qualitative, not ground-truth evaluation.*
+
+![Original-resolution head crops, FBA alpha, and post-processing for all 12 photos](docs/evaluation/full-dataset-head-matting.jpg)
+
+*Each row shows the original head crop, the existing-mask baseline composite, the FBA composite and alpha, then the post-processed composite and alpha. Alpha is white at 1 (foreground) and black at 0 (background). The crop includes the face and is not hair-only segmentation.*
+
+| Photo | Foreground share: existing / GrabCut / Random Walker | FBA head crop (pixels; tiles) | FBA alpha mass reduced | Observed outcome |
+|---|---:|---:|---:|---|
+| shot2 | 17.5% / 14.4% / 37.7% | 439×501; 1 | 0.05% | Existing keeps more of the jacket than GrabCut; Random Walker includes a broad blind/wall halo. FBA and refinement make little visible difference in the head crop. |
+| shot3 | 16.5% / 14.2% / 36.7% | 425×491; 1 | 0.04% | Existing and GrabCut retain similar silhouettes; Random Walker includes surrounding wall. FBA adds a soft hair edge, with little further change after refinement. |
+| shot4 | 17.4% / 13.9% / 36.3% | 420×492; 1 | 0.05% | Existing and GrabCut differ around the shoulders; Random Walker includes a broad background halo. FBA and refined head mattes remain similar. |
+| shot5 | 22.7% / 27.7% / 55.4% | 721×645; 1 | 0.54% | Existing and GrabCut keep the main silhouette but have coarse edges; Random Walker includes the surrounding background. FBA softens the hair boundary, while some haze remains. |
+| test1 | 21.2% / 28.2% / 50.7% | 692×654; 1 | 0.25% | Existing loses parts of the dark clothing; GrabCut keeps a rectangular room patch and fragments; Random Walker includes a wide background halo. FBA retains a soft hair edge, with only a small refinement change. |
+| test2 | 27.2% / 25.9% / 50.1% | 661×645; 1 | 0.41% | The dark-clothing boundary remains rough in the existing mask; GrabCut includes a rectangular room patch, and Random Walker includes the surrounding room. FBA/refinement do not remove all hair-adjacent haze. |
+| test3 | 21.7% / 28.3% / 40.0% | 673×732; 1 | 0.68% | Existing and GrabCut keep more of the hair and sweatshirt than Random Walker, which includes surrounding background. FBA recovers curl detail but leaves some haze. |
+| test4 | 30.6% / 38.1% / 43.5% | 598×635; 1 | 0.53% | Existing clips parts of the dark clothing; GrabCut includes a rectangular wall patch; Random Walker has a broad halo. FBA recovers hair-edge detail, but ambiguity remains. |
+| test5 | 49.0% / 50.5% / 58.6% | 2152×2431; 16 | 1.75% | Existing and GrabCut give similar broad masks; Random Walker includes wall around the person. FBA recovers fine curls but leaves wall texture; this photo has the largest whole-crop alpha reduction, still below 2%. |
+| test6 | 48.8% / 50.9% / 59.6% | 2095×2246; 16 | 0.29% | Existing and GrabCut keep the main silhouette; Random Walker includes surrounding wall. FBA preserves hair detail, with a small whole-crop change after refinement. |
+| test8 | 26.4% / 33.2% / 43.9% | 641×642; 1 | 0.04% | Existing and GrabCut retain the main silhouette with rough clothing edges; Random Walker includes the blanket/background. FBA and refinement are close to the baseline around the hairline. |
+| test9 | 37.5% / 53.6% / 51.2% | 1282×1518; 6 | 0.42% | Existing and GrabCut have rough hoodie/background edges, while Random Walker includes a broad room region. FBA creates a soft, hazy head edge; refinement reduces little of the full-crop alpha. |
+
+Across the set, GrabCut is not a consistent replacement: it sometimes preserves more clothing or hair, but also removes subject pixels or includes distinct room regions. Random Walker repeatedly includes broad background around the subject. FBA completes on all 12 head crops and can recover softer hair detail, but the result remains dependent on the existing prior and trimap; the broad haze in some crops is not reliably removed by the current post-processing.
+
 ## 1. Testing Alternatives to the Person Prior
 
 ### Why
@@ -116,7 +149,7 @@ With the default automatic trimap and four CPU threads:
 | shot2 | 439×501 | FBA/CF recover the hair outline, but background structures such as the blind or its cord may remain |
 | test5 | 2152×2431 | 16 FBA tiles, about 11–12 seconds. Fine strands are recovered, but wood grain and faint haze remain above and beside the hair |
 
-On small crops, FBA took about 0.3–1.2 seconds, CF 0.5–1.8 seconds, and KNN 0.8–2.4 seconds. These ranges include first-inference initialization and variation between runs. CF/KNN were not run on test5 because it exceeds 1 million pixels. The shadow-heavy test9 was not used. These are matting-stage times, not real-time performance.
+On the earlier small-crop comparison, FBA took about 0.3–1.2 seconds, CF 0.5–1.8 seconds, and KNN 0.8–2.4 seconds. These ranges include first-inference initialization and variation between runs. That comparison did not run CF/KNN on test5 because it exceeded 1 million pixels, and did not include test9. The full-dataset run above includes test5, test6, and test9 with FBA only; all three native head crops exceed 1 million pixels. These are matting-stage times, not real-time performance.
 
 For test5, changing `--band` from 0.25 to 0.12 reduced the unknown-pixel share from about 41% to 24% and visibly reduced wood-grain haze, but increased the risk of losing distant strands. There is no evidence that 0.12 is generally optimal, so the default was not changed. The conclusion is that native-resolution matting is worth testing, but changing the model alone does not solve the problem; the sure regions in the crop and trimap also need validation.
 
