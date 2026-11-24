@@ -184,6 +184,86 @@ def test_fba_trimap_keeps_a_wide_unknown_band_around_the_whole_person():
         fba_trimap(rgb, lm, before)
 
 
+@pytest.mark.parametrize("changed", [False, True], ids=["unchanged-mask", "added-clothing"])
+@pytest.mark.parametrize("full_grid", [False, True], ids=["live", "full-grid"])
+def test_fba_comparison_uses_each_result_as_its_own_trimap_source(
+        tmp_path, monkeypatch, changed, full_grid):
+    import csv
+    import sys
+    from types import SimpleNamespace
+
+    from tools import eval_clothing, fba_reference
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    alpha = np.zeros(rgb.shape[:2], np.float32)
+    alpha[60:250, 100:170] = 1
+    face = np.zeros_like(alpha, dtype=bool)
+    face[65:100, 110:155] = True
+    improved_alpha = alpha.copy()
+    if changed:
+        improved_alpha[150:250, 170:240] = 1
+    before = SimpleNamespace(
+        alpha=alpha, face_mask=face, output_frame=rgb / 255,
+        stats={"matting": {"threshold": 0.5}})
+    after = SimpleNamespace(
+        alpha=improved_alpha, face_mask=face, output_frame=rgb / 255,
+        stats={"matting": {"threshold": 0.5, "clothing_applied": changed,
+                           "clothing_samples": 100, "clothing_background_samples": 100}})
+    baseline = object()
+    calls = []
+
+    class FakeFBA:
+        def process(self, image, trimap, tile_size, overlap):
+            prediction = np.zeros((*trimap.shape, 7), np.float32)
+            prediction[..., 0] = np.where(trimap == 255, 1, np.where(trimap == 0, 0, 0.25))
+            prediction[..., 1:4] = image / 255
+            calls.append((image.copy(), trimap.copy(), prediction.copy(), tile_size, overlap))
+            return prediction, 1
+
+    sheets = {}
+    monkeypatch.setattr(eval_clothing, "NAMES", ["case"])
+    monkeypatch.setattr(eval_clothing, "baseline_module", lambda _: baseline)
+    monkeypatch.setattr(eval_clothing.cv2, "imread", lambda _: rgb[..., ::-1].copy())
+    monkeypatch.setattr(eval_clothing, "to_live", lambda image: (image, 1))
+    monkeypatch.setattr(eval_clothing, "process",
+                        lambda module, *_args: (before if module is baseline else after, 1.0))
+    monkeypatch.setattr(eval_clothing, "write_sheets",
+                        lambda panels, titles, prefix, _out: sheets.update({prefix: (panels, titles)}))
+    monkeypatch.setattr(fba_reference, "FBAReference", FakeFBA)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(set_num_threads=lambda _: None))
+    cache, out = tmp_path / "cache", tmp_path / "out"
+    cache.mkdir()
+    np.save(cache / "case-live.npy", lm)
+    args = ["eval_clothing.py", "--fba", "--cache", str(cache), "--out", str(out)]
+    if full_grid:
+        args.append("--full-grid")
+    monkeypatch.setattr(sys, "argv", args)
+
+    eval_clothing.main()
+
+    assert len(calls) == 2
+    for call, source in zip(calls, (before, after)):
+        np.testing.assert_array_equal(call[0], rgb)
+        np.testing.assert_array_equal(call[1], eval_clothing.fba_trimap(rgb, lm, source))
+        assert call[3:] == (1024, 96)
+    assert np.any(calls[0][1] != calls[1][1]) == changed
+    base_alpha, combined_alpha = calls[0][2][..., 0], calls[1][2][..., 0]
+    with (out / "measurements.csv").open(newline="") as stream:
+        row, = csv.DictReader(stream)
+    assert int(row["combined_trimap_foreground"]) == int((calls[1][1] == 255).sum())
+    assert int(row["combined_vs_fba_added_pixels"]) == int(((combined_alpha > 0.5) & (base_alpha <= 0.5)).sum())
+    assert int(row["combined_vs_fba_removed_pixels"]) == int(((base_alpha > 0.5) & (combined_alpha <= 0.5)).sum())
+    assert float(row["combined_vs_fba_mean_abs_alpha_difference"]) == pytest.approx(
+        float(np.abs(combined_alpha - base_alpha).mean()))
+    assert (int(row["combined_vs_fba_added_pixels"]) > 0) == changed
+    comparison, titles = sheets["comparison"]
+    assert titles[-1] == "Clothing improvement + FBA"
+    np.testing.assert_array_equal(comparison[0][-1], eval_clothing.fba_composite(calls[1][2]))
+    trimap_panels, _ = sheets["trimap"]
+    np.testing.assert_array_equal(trimap_panels[0][-2], calls[1][1])
+    np.testing.assert_array_equal(trimap_panels[0][-1], combined_alpha)
+
+
 def test_fba_tiles_keep_resolution_and_respect_known_trimap_regions():
     from tools.fba_reference import native_tiles
 

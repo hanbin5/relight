@@ -48,21 +48,21 @@ def process(module, rgb, lm, fast):
     return ctx, 1000 * (time.perf_counter() - start)
 
 
-def fba_trimap(rgb, lm, before):
+def fba_trimap(rgb, lm, result):
     from tools.fba_reference import validate_trimap
 
-    if before.alpha is None or before.alpha.shape != rgb.shape[:2]:
-        raise ValueError("The baseline alpha must match the input frame.")
-    if not np.isfinite(before.alpha).all() or before.alpha.min() < 0 or before.alpha.max() > 1:
-        raise ValueError("The baseline alpha must be finite and in [0, 1].")
-    if before.face_mask is None or before.face_mask.shape != rgb.shape[:2]:
-        raise ValueError("The baseline face mask must match the input frame.")
+    if result.alpha is None or result.alpha.shape != rgb.shape[:2]:
+        raise ValueError("The source alpha must match the input frame.")
+    if not np.isfinite(result.alpha).all() or result.alpha.min() < 0 or result.alpha.max() > 1:
+        raise ValueError("The source alpha must be finite and in [0, 1].")
+    if result.face_mask is None or result.face_mask.shape != rgb.shape[:2]:
+        raise ValueError("The source face mask must match the input frame.")
     f = matting.face_measures(lm)
     fw, ec, cx, chin_y = f["fw"], f["ec"], f["cx"], f["chin"][1]
     if not np.isfinite([fw, ec, cx, chin_y]).all() or fw <= 0 or ec <= 0:
         raise ValueError("Valid face dimensions and position are required for the FBA trimap.")
-    foreground = before.alpha > 0.5
-    sure_fg = npimg.erode(foreground, max(1, round(FBA_EROSION * fw))) | before.face_mask
+    foreground = result.alpha > 0.5
+    sure_fg = npimg.erode(foreground, max(1, round(FBA_EROSION * fw))) | result.face_mask
     sure_bg = ~npimg.dilate(foreground, max(1, round(FBA_BAND * fw)))
     yy = np.arange(rgb.shape[0], dtype=np.float32)[:, None] + 0.5
     xx = np.arange(rgb.shape[1], dtype=np.float32)[None, :] + 0.5
@@ -147,7 +147,7 @@ def main():
     parser.add_argument("--sample-figure", action="store_true",
                         help="also visualize sample candidates for shot2 and test5")
     parser.add_argument("--fba", action="store_true",
-                        help="include the full-frame, baseline-trimap-conditioned FBA research reference")
+                        help="compare full-frame FBA using baseline and improved-mask trimaps")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
@@ -199,6 +199,11 @@ def main():
                 prediction, tiles = fba.process(rgb, trimap, tile_size=1024, overlap=96)
                 fba_ms = 1000 * (time.perf_counter() - start)
                 fba_alpha = prediction[..., 0]
+                improved_trimap = fba_trimap(rgb, lm, after)
+                start = time.perf_counter()
+                combined, combined_tiles = fba.process(rgb, improved_trimap, tile_size=1024, overlap=96)
+                combined_ms = 1000 * (time.perf_counter() - start)
+                combined_alpha = combined[..., 0]
                 row.update({
                     "fba_trimap_foreground": int((trimap == 255).sum()),
                     "fba_trimap_background": int((trimap == 0).sum()),
@@ -206,10 +211,18 @@ def main():
                     "fba_added_pixels": int(((fba_alpha > .5) & (before.alpha <= .5)).sum()),
                     "fba_removed_pixels": int(((before.alpha > .5) & (fba_alpha <= .5)).sum()),
                     "fba_tiles": tiles, "fba_ms": fba_ms,
+                    "combined_trimap_foreground": int((improved_trimap == 255).sum()),
+                    "combined_trimap_background": int((improved_trimap == 0).sum()),
+                    "combined_trimap_unknown": int((improved_trimap == 128).sum()),
+                    "combined_vs_fba_added_pixels": int(((combined_alpha > .5) & (fba_alpha <= .5)).sum()),
+                    "combined_vs_fba_removed_pixels": int(((fba_alpha > .5) & (combined_alpha <= .5)).sum()),
+                    "combined_vs_fba_mean_abs_alpha_difference": float(np.abs(combined_alpha - fba_alpha).mean()),
+                    "combined_tiles": combined_tiles, "combined_ms": combined_ms,
                 })
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
-                               fba_composite(prediction), color.encode_u8(after.output_frame)))
-                fba_panels.append((name, rgb, trimap, fba_alpha))
+                               fba_composite(prediction), color.encode_u8(after.output_frame),
+                               fba_composite(combined)))
+                fba_panels.append((name, rgb, trimap, fba_alpha, improved_trimap, combined_alpha))
             else:
                 panels.append((name, rgb, color.encode_u8(before.output_frame),
                                color.encode_u8(after.output_frame), before.alpha, after.alpha))
@@ -229,9 +242,11 @@ def main():
         write_sheets(panels, ["Original", "Main", "Clothing improvement",
                               "Main alpha", "Clothing improvement alpha"], "comparison", args.out)
     else:
-        write_sheets(panels, ["Original", "Main", "FBA", "Clothing improvement"],
+        write_sheets(panels, ["Original", "Main", "FBA", "Clothing improvement",
+                              "Clothing improvement + FBA"],
                      "comparison", args.out)
-        write_sheets(fba_panels, ["Original", "FBA trimap", "FBA alpha"], "trimap", args.out)
+        write_sheets(fba_panels, ["Original", "Main trimap", "FBA alpha",
+                                  "Clothing trimap", "Clothing + FBA alpha"], "trimap", args.out)
     if args.sample_figure:
         import matplotlib.pyplot as plt
 

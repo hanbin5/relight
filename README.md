@@ -2,21 +2,21 @@
 
 # Module B Clothing-Recovery Experiments
 
-![Original, Main, FBA, and Clothing improvement for shot2 and shot5](docs/evaluation/clothing/fba/comparison-1.jpg)
+![Original, Main, FBA, clothing improvement, and combined results for shot2 and shot5](docs/evaluation/clothing/fba/comparison-1.jpg)
 
-*Top to bottom: shot2 and shot5. Left to right: **Original** (input photo), **Main** (existing main result), **FBA** (FBA model result), and **Clothing improvement** (improved clothing-recovery result). FBA receives a trimap (known foreground, known background, and unknown regions) automatically derived from the Main alpha mask and facial landmarks. The three result columns are composited on white.*
+*Top to bottom: shot2 and shot5. Left to right: **Original** (input photo), **Main** (existing result), **FBA** (using a Main-mask trimap), **Clothing improvement**, and **Clothing improvement + FBA** (using an improved-mask trimap). Both FBA results use the same original photo and facial landmarks; only their trimaps differ. A trimap marks known foreground, known background, and unknown regions. The four result columns are composited on white.*
 
-![Original, Main, FBA, and Clothing improvement for the four dark-room photos](docs/evaluation/clothing/fba/comparison-2.jpg)
+![Original and four results for the dark-room photos](docs/evaluation/clothing/fba/comparison-2.jpg)
 
 *Top to bottom: test1–test4. The column order is the same.*
 
-![Original, Main, FBA, and Clothing improvement for the remaining four photos](docs/evaluation/clothing/fba/comparison-3.jpg)
+![Original and four results for the remaining four photos](docs/evaluation/clothing/fba/comparison-3.jpg)
 
 *Top to bottom: test5, test6, test8, test9. The column order is the same.*
 
 If the existing background-separation pipeline is unfamiliar, first read the [Module B matting overview](https://github.com/hanbin5/relight/blob/module-b/matting/README.md). This report does not repeat that pipeline; it describes the attempts to recover missing clothing and their results. The selected change is in the app's `idphoto/matting.py`, not just an offline experiment.
 
-The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model; FBA is an offline learned reference only.
+The **person prior** uses facial landmarks to assume where a person might be, and the **gate** limits that region. **Color-sample candidates** are pixels eligible to be sampled for a color model. **Alpha** is 0 for background, 1 for foreground, and intermediate where the two colors are mixed. The app has no semantic clothing-segmentation model; FBA and the combined result are offline noncommercial research comparisons, not app features.
 
 ## Full-Dataset Evaluation: 12 Photo Files
 
@@ -24,9 +24,9 @@ We compared `shot2`–`shot5`, `test1`–`test6`, `test8`, and `test9` in `docs/
 
 The 12 files are not 12 independent scenes: `shot2`–`shot4` are very similar views of the same scene. The comparison and trimap sheets show `shot2` as their representative and retain the differently framed `shot5`; the table and CSVs still include all 12 photos.
 
-The existing baseline is main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`; the improved implementation is `06ec619158d68d7c3417fd47ce8fd3703ae269ca`. The additional FBA reference processes the **whole 640 px-wide frame**, including clothing, using a trimap derived from that main baseline and landmarks. It is not the earlier head-only FBA crop. Each input and set of landmarks is shared; relighting strength is 0 and the replacement background is white. Each app run uses a new `Matter` with `update=False`, so color models do not carry over from another photograph.
+The existing baseline is main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`; the improved implementation is `06ec619158d68d7c3417fd47ce8fd3703ae269ca`. The FBA reference uses a trimap derived from main alpha and landmarks; the combined result uses a trimap derived from improved clothing alpha and the same landmarks. Both process the **whole 640 px-wide frame**, including clothing, not the earlier head-only FBA crop. Each input and set of landmarks is shared; relighting strength is 0 and the replacement background is white. Each app run uses a new `Matter` with `update=False`, so color models do not carry over from another photograph.
 
-**There are no ground-truth masks for the real photos.** The numbers count pixels whose alpha was at most 0.5 in main and above 0.5 in ours; they are not comparisons against FBA. They are not counts of actual clothing pixels, accuracy, or recall; added background is included. Images have different sizes, so counts across photos are not comparable as quality scores. Observations refer to the live result; left and right are as viewed in the image.
+**There are no ground-truth masks for the real photos.** The first table's numbers count pixels whose alpha was at most 0.5 in main and above 0.5 in ours; they are not comparisons against FBA. They are not counts of actual clothing pixels, accuracy, or recall; added background is included. Images have different sizes, so counts across photos are not comparable as quality scores. Observations refer to the live result; left and right are as viewed in the image.
 
 | Photo | Ours added: live | Ours added: full grid | Ours: live result and remaining problem | FBA: live observation |
 |---|---:|---:|---|---|
@@ -43,6 +43,25 @@ The existing baseline is main commit `e96bb08cb678634207ea3aa45f086152c4c96f11`;
 | test8 | 15,664 | 14,794 | Outer black sleeves return, with collar notches and blocky edges remaining. | The top remains more fully, but the fabric backdrop leaves haze. |
 | test9 | 34,428 | 15,183 | More dark hoodie remains, but shadow-side gaps, attached background, and a clipped hair edge remain. | Hair and hoodie extend farther, but broad background haze remains. |
 
+### FBA and Clothing Improvement + FBA: 12 Photos
+
+The counts below are pixels added / removed by the **combined live result relative to FBA**. Each counts whole-frame pixels crossing the alpha 0.5 threshold in one direction. These are not actual clothing pixels or ground-truth errors; they include background leakage.
+
+| Photo | Added / removed vs FBA | Combined result |
+|---|---:|---|
+| shot2 | 2,079 / 0 | The translucent jacket becomes more opaque, but some background remains on the right. |
+| shot3 | 1,111 / 999 | The left jacket is less translucent, but some background remains. |
+| shot4 | 22 / 433 | Most of the jacket remains, much like FBA, along with a background object on the right. |
+| shot5 | 0 / 0 | No clothing samples are available; both trimaps and FBA alphas match, and the jacket still fades. |
+| test1 | 18,831 / 439 | The top remains, but dark room objects at the sides are more prominent than in FBA. |
+| test2 | 8,747 / 1 | The top remains connected to dark background objects on both sides. |
+| test3 | 2,044 / 10 | The shoulders remain, but so does background haze on the right. |
+| test4 | 2,979 / 91 | Hair and shoulders remain along with dark objects and haze on both sides. |
+| test5 | 1,090 / 43 | The white top remains along with the left wall strip and wall texture. |
+| test6 | 10,256 / 36 | The wall behind the right shoulder is more prominent than in FBA. |
+| test8 | 38 / 2,640 | The black top and faint fabric-backdrop haze remain, with some alpha changes from FBA. |
+| test9 | 65,273 / 0 | The hoodie is more opaque, but background around the head and upper left is much more prominent. |
+
 ### Jackets: shot2–shot5
 
 Much of shot2's previously missing khaki jacket returns, but not every sleeve or background error is fixed. In shot5 the face fills the frame and there are zero clothing-sample candidates, so the baseline result is left unchanged.
@@ -55,25 +74,27 @@ In test1 and test2, a wider area of black clothing remains, but dark objects in 
 
 The right white shoulder in test5 is wider than before, but in test6 the bright wall behind the shoulders is newly included as well. Separating similarly colored clothing and wall remains unsolved.
 
-### FBA Reference and Its Trimap
+### FBA Reference, Combination, and Trimaps
 
-FBA estimates foreground, background, and alpha from an image and a **trimap**, not from the image alone. We generate that trimap automatically from the main alpha: threshold at 0.5, erode by 0.06 face widths to mark sure foreground, and mark the face mask as foreground. Pixels beyond a 0.5-face-width dilation are sure background, except inside a generous landmark-based body envelope below the chin; those pixels remain unknown unless already sure foreground. The envelope's half-width grows from 1 to 3.5 face widths over one eye-to-chin distance, using the square root of the normalized distance. Erosion and dilation use square windows, with radii rounded to the nearest pixel and a minimum of one pixel.
+FBA estimates foreground, background, and alpha from an image and a **trimap**, not from the image alone. The reference receives a trimap derived from main alpha; the combination receives a trimap derived from **clothing-improved alpha using the same rules**. Both use the original photo as FBA input. Thus this experiment runs clothing improvement first to change FBA's input, rather than applying the clothing model as a postprocess to an FBA result.
+
+We threshold each alpha at 0.5, erode by 0.06 face widths to mark sure foreground, and mark the face mask as foreground. Pixels beyond a 0.5-face-width dilation are sure background, except inside a generous landmark-based body envelope below the chin; those pixels remain unknown unless already sure foreground. The envelope's half-width grows from 1 to 3.5 face widths over one eye-to-chin distance, using the square root of the normalized distance. Erosion and dilation use square windows, with radii rounded to the nearest pixel and a minimum of one pixel.
 
 ![FBA input, automatic trimap, and alpha for the jacket photos](docs/evaluation/clothing/fba/trimap-1.jpg)
 
-*Left to right: Original / FBA trimap / FBA alpha. In the trimap, white is forced foreground, black is forced background, and gray is unknown. The broad gray body region includes background as well as clothing. [Dark-room trimaps](docs/evaluation/clothing/fba/trimap-2.jpg) and [remaining trimaps](docs/evaluation/clothing/fba/trimap-3.jpg) show the other eight photos.*
+*Left to right: Original / Main trimap / FBA alpha / Clothing trimap / Clothing + FBA alpha. In both trimaps, white is forced foreground, black is forced background, and gray is unknown. The broad gray body region includes background as well as clothing. [Dark-room trimaps](docs/evaluation/clothing/fba/trimap-2.jpg) and [remaining trimaps](docs/evaluation/clothing/fba/trimap-3.jpg) show the other eight photos.*
 
-This is **FBA conditioned on the main mask and landmarks**, not an independent automatic segmentation baseline or a manually corrected trimap. Background erroneously marked sure foreground cannot be removed, and clothing marked sure background cannot be recovered. The wide body region allows FBA to decide on sleeves outside the old mask, but also allows wall leakage. The unknown share of the live trimaps ranges from 31.1% to 59.7% (median 42.5%); this describes the input, not quality. For example, FBA retains more jacket in shot2–shot4, but shot5's jacket still fades, and test1/test9 have substantial background haze.
+These are **FBA conditioned on the main or improved mask and landmarks**, not an independent automatic segmentation baseline or a manually corrected trimap. Background erroneously marked sure foreground cannot be removed, and clothing marked sure background cannot be recovered. If clothing improvement wrongly includes background that becomes sure foreground in the combined trimap, FBA cannot remove it. The wide body region allows FBA to decide on sleeves outside the old mask, but also allows wall leakage. The unknown share of the main-derived live trimaps ranges from 31.1% to 59.7% (median 42.5%); this describes the input, not quality. The combination makes shot2's jacket more opaque, but also makes background more prominent in test6 and test9, so it is not uniformly better.
 
-FBA runs on the same resized 640 px input as the app comparisons, on CPU with four threads and a 1024 px tile size. All 12 frames fit in one tile; padding to a multiple of eight preserves the input pixel grid. The reference enforces the trimap's known labels and uses FBA's estimated foreground and alpha for an sRGB white composite, without additional refinement. The app instead composites in linear light with its own spill removal, so composite colors are not strictly like-for-like. In the live run, FBA processing took a median 277 ms (226–1,326 ms range), excluding model loading, trimap generation, landmark detection, and the main mask needed to make the trimap. These single-run CPU times are not end-to-end or real-time measurements.
+FBA runs on the same resized 640 px input as the app comparisons, on CPU with four threads and a 1024 px tile size. All 12 frames fit in one tile; padding to a multiple of eight preserves the input pixel grid. The reference enforces the trimap's known labels and uses FBA's estimated foreground and alpha for an sRGB white composite, without additional refinement. The app instead composites in linear light with its own spill removal, so composite colors are not strictly like-for-like. In this single live run, the FBA call took a median 291 ms (234–1,491 ms range) and the combined FBA call 292 ms (236–683 ms range). The combined call runs second on the same model, so these are not a fair speed comparison; both exclude model loading, trimap generation, landmark detection, and input-mask generation. They are not end-to-end or real-time measurements.
 
-The live path calculates color decisions and filter coefficients on a **half-size grid, `s=2`**, from the 640 px input. The full-grid comparison applies the shutter algorithm's **`s=1` to the same 640 px input** and derives a new FBA trimap from that mode's main alpha: [jackets](docs/evaluation/clothing/full-grid-fba/comparison-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/comparison-2.jpg), and [other photos](docs/evaluation/clothing/full-grid-fba/comparison-3.jpg). On this path the shoulders in shot2 and shot4 remain fragmented, while shot3 gains more than in live mode. **This is not an original-resolution export evaluation**, nor evidence that the two paths produce identical boundaries.
+The live path calculates color decisions and filter coefficients on a **half-size grid, `s=2`**, from the 640 px input. The full-grid comparison applies the shutter algorithm's **`s=1` to the same 640 px input** and derives both trimaps from that mode's main and improved alphas: [jackets](docs/evaluation/clothing/full-grid-fba/comparison-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/comparison-2.jpg), and [other photos](docs/evaluation/clothing/full-grid-fba/comparison-3.jpg). The clothing-only shoulders in shot2 and shot4 remain fragmented on this path, while shot3 gains more than in live mode. **This is not an original-resolution export evaluation**, nor evidence that the two paths produce identical boundaries.
 
 Full-grid FBA trimaps and alphas: [jackets](docs/evaluation/clothing/full-grid-fba/trimap-1.jpg), [dark room](docs/evaluation/clothing/full-grid-fba/trimap-2.jpg), [other photos](docs/evaluation/clothing/full-grid-fba/trimap-3.jpg). The earlier main-versus-ours live alpha sheets remain available for [jackets](docs/evaluation/clothing/comparison-1.jpg), [dark room](docs/evaluation/clothing/comparison-2.jpg), and [other photos](docs/evaluation/clothing/comparison-3.jpg). Their columns are Original / Main / Clothing improvement / Main alpha / Clothing improvement alpha.
 
 The [live CSV](docs/evaluation/clothing/measurements.csv) and [full-grid CSV](docs/evaluation/clothing/full-grid/measurements.csv) record thresholds, sample-candidate counts, application status, and single-run times for all 12 photos. Across the set, live mode adds 161,275 pixels and removes 9; full grid adds 122,211 and removes 6. Removed pixels had alpha above 0.5 before and at most 0.5 after. Recovery only adds to the binary mask **before** cleanup; subsequent cleanup and guided-filter recomputation can also change existing edges.
 
-The [FBA live CSV](docs/evaluation/clothing/fba/measurements.csv) and [FBA full-grid CSV](docs/evaluation/clothing/full-grid-fba/measurements.csv) also record the trimap class sizes, FBA pixels added/removed relative to main at alpha 0.5, tile count, and processing time. These differences are not ground-truth errors or clothing accuracy.
+The [FBA live CSV](docs/evaluation/clothing/fba/measurements.csv) and [FBA full-grid CSV](docs/evaluation/clothing/full-grid-fba/measurements.csv) also record both trimap class sizes, FBA pixels added/removed relative to main and combined pixels added/removed relative to FBA at alpha 0.5, the mean absolute difference between the two FBA alphas, tile counts, and processing times. These differences are not ground-truth errors or clothing accuracy.
 
 The figures show white-background composites regardless of rule 7. The app can retain the original wall when rule 7 fails at the shutter, so the figures do not necessarily represent what would be saved.
 
@@ -140,7 +161,7 @@ Unlike the real photos, the person region in each 320 × 280 synthetic scene is 
 
 After recovery, false foreground in these scenes occupied about 0.013–0.016% of the **whole image**, not of the background alone. The tests require target retention above 98% and false foreground below 0.5% of the whole image. They also check the sampling guard and clearing warm state when the chest is cropped.
 
-These simple scenes check the intended regressions; they do not establish accuracy on real photos, separation of identical clothing and wall colors, coverage of varied poses, or hair-boundary quality.
+These simple scenes check the intended clothing-only regressions; they do not evaluate the FBA combination or establish accuracy on real photos, separation of identical clothing and wall colors, coverage of varied poses, or hair-boundary quality.
 
 ## 4. Reproduction and Limitations
 
@@ -170,11 +191,11 @@ uv run --extra fba pytest tests/test_matting_checker.py -q
 uv run --extra fba pytest -q
 ```
 
-The commands download the authors' source and approximately 139 MB of weights into ignored `models/fba/`; photos remain local. The adapter verifies source revision `8dd100d760186150710510ee8d78ed916cdb17a4` and weight SHA-256 `f3f8a2b6cefd7200368b6008a712468ed1debc6658693db31b0f719f658a2967` and loads weights with `weights_only=True`. Each FBA run writes three four-column comparison sheets, three trimap/alpha sheets, and a CSV. Missing or invalid assets and trimaps raise errors rather than silently substituting another method.
+The commands download the authors' source and approximately 139 MB of weights into ignored `models/fba/`; photos remain local. The adapter verifies source revision `8dd100d760186150710510ee8d78ed916cdb17a4` and weight SHA-256 `f3f8a2b6cefd7200368b6008a712468ed1debc6658693db31b0f719f658a2967` and loads weights with `weights_only=True`. Each FBA run writes three five-column comparison sheets including the combination, three sheets comparing both trimaps and alphas, and a CSV. Missing or invalid assets and trimaps raise errors rather than silently substituting another method.
 
 Landmarks are detected in image mode and cached by default in `out/clothing-landmarks/`; the same values are used within each before/after pair. The cache is not tracked by Git. Redetection in a fresh environment or with a fresh `--cache` directory can change landmarks and measurements. Missing photos or faces raise errors instead of being silently omitted. `test9.jpg` was restored unchanged from `e8e798c8eee3118bebba4ba8f34c37808f84c250` on `module-b/person-prior`.
 
-Validation with the FBA assets passed 206 tests overall, including 36 matting/checker tests. Main and improved CSV times are single cold-run measurements of the matting stage only; they exclude loading, landmark detection, and relighting. They are diagnostics, not a latency guarantee or a 10 fps claim.
+Validation with the FBA assets passed 213 tests overall, including 43 matting/checker tests. Main and improved CSV times are single cold-run measurements of the matting stage only; they exclude loading, landmark detection, and relighting. They are diagnostics, not a latency guarantee or a 10 fps claim.
 
 This is a **bounded clothing-recovery improvement, not a general portrait-segmentation solution**. It cannot recover clothing without samples, as in shot5; similar-colored objects in test1/test2/test9 and the wall in test6 can remain. Crossed arms or an occluded chest can invalidate the assumed sample and shoulder locations. Original-resolution export, warm starts on real sequences, landmark jitter, and sustained webcam performance were not evaluated. Accuracy or production-readiness claims need hand-drawn masks and temporal evaluation.
 
