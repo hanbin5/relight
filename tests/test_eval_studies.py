@@ -45,3 +45,15 @@ def test_usability_summary():
     s = score_usability.summary(rows)
     assert s["fewer_retakes"] == 1 and s["same_retakes"] == 1
     assert s["seconds_saved_median"] == 30
+
+
+def test_identity_alignment_recovers_a_known_transform():
+    import numpy as np
+
+    import identity_check
+
+    angle, scale, shift = np.radians(10), 1.7, np.array([5.0, -3.0])
+    rot = scale * np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+    src = identity_check.TEMPLATE
+    A, t = identity_check.similarity_transform(src, src @ rot.T + shift)
+    assert np.allclose(A, rot) and np.allclose(t, shift)
