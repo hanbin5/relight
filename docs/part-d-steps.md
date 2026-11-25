@@ -11,9 +11,9 @@ The checker itself (`idphoto/checker.py`) and the auto shutter already work. Wha
 | 1 | `tools/eval_checker.py`: precision and recall per rule on a folder of labeled photos | Nov 17–18 | Done |
 | 2 | Collect the test set: ~20 people × 1 good photo + 7 staged faults | Nov 18–20 | To do |
 | 3 | Tune the thresholds in `config.py` from the CSV the script saves; target ≥ 90% recall per rule | Nov 20–21 | To do |
-| 4 | Blind rating: 50 raters, relit vs unrelit (pass: ≥ 32 of 50 prefer relit) | Nov 16–22 | To do |
-| 5 | Usability test: 10 users, our app vs phone camera + an app (pass: fewer retakes for ≥ 6 of 10) | Nov 19–22 | To do |
-| 6 | Identity check: ArcFace similarity, relit vs unrelit and AI profile vs unrelit | after Nov 22 if needed | To do |
+| 4 | Blind rating: 50 raters, relit vs unrelit (pass: ≥ 32 of 50 prefer relit) | Nov 16–22 | Code done (`make_rating_pairs.py`, `score_rating.py`); needs raters |
+| 5 | Usability test: 10 users, our app vs phone camera + an app (pass: fewer retakes for ≥ 6 of 10) | Nov 19–22 | Code done (`score_usability.py`); needs users |
+| 6 | Identity check: ArcFace similarity, relit vs unrelit and AI profile vs unrelit | after Nov 22 if needed | Relit vs unrelit done; AI profile baseline needs AI photos |
 | 7 | Write up results for the report, including anything that missed its target | Nov 22–28 | To do |
 
 Nov 22 is the feature freeze (C.3).
@@ -56,3 +56,4 @@ Get consent before taking anyone's photo. `testset/` is in `.gitignore`, so **do
 - Bounds changed Nov 25: rule 3 floor 15 → 8 (one webcam scores 14 on a sharp photo, ~1 blurred); rule 7 uncertain share 2% → 3% (good photos 1.4–2.4%; good photos failing rule 7 went 6 → 3, the 3 left are dark tops in dark rooms, a correct fail); rule 4 pitch ratio 0.85–1.15 → 0.94–1.17 (about −5° to +12.5° on the synthetic face). Pitch still fails most real photos (1.2–1.4); the planned on-screen face guide should help people hold a level head.
 - Tilting the head makes relighting uneven (R_LR 1.03 → 1.13–1.15 on tilted copies): the target light follows yaw but not roll. For A.
 - `eval_checker.py` runs each photo on its own, so rule 3 uses the starting bound (120), not the per-camera one. Pick each camera's bound from the sharpness values in the CSV.
+- Identity check (Nov 25, `identity_check.py`): relit vs unrelit ArcFace similarity is 0.81–0.96 (mean 0.91) on the 11 photos. For scale, the same model gives 0.70–0.96 for two different photos of the same person and 0.08–0.19 for different people, so relighting keeps the face. test3 and test6 score 0.65 against each other and are probably the same person, so the 11 photos come from about 3–4 people.
