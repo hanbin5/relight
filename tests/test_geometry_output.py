@@ -107,55 +107,67 @@ def test_mediapipe_finds_the_synthetic_face_where_the_renderer_put_it():
     assert np.linalg.norm(found[:468, :2] - lm[:468, :2], axis=1).mean() < 0.04 * face_width
 
 
-@pytest.mark.parametrize("deg", [-20.0, 0.0, 12.5])
-def test_pitch_is_the_rotation_about_the_x_axis(deg):
-    from idphoto.landmarks import pitch_from_matrix
-
-    a = np.radians(deg)
+def _rotation(pitch_deg, yaw_deg):
+    """4 x 4 matrix that turns by yaw about y after pitch about x, with some translation."""
+    p, y = np.radians([pitch_deg, yaw_deg])
+    rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])
+    ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]])
     m = np.eye(4)
-    m[1:3, 1:3] = [[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]
+    m[:3, :3] = ry @ rx
     m[:3, 3] = (1.0, -2.0, -40.0)  # the translation does not matter
-    assert pitch_from_matrix(m.tolist()) == pytest.approx(deg)
+    return m.tolist()
+
+
+@pytest.mark.parametrize("pitch, yaw", [(-20.0, 0.0), (0.0, 0.0), (12.5, 0.0), (0.0, -18.0), (8.0, 10.0)])
+def test_pitch_and_yaw_come_back_from_the_matrix(pitch, yaw):
+    from idphoto.landmarks import pitch_from_matrix, yaw_from_matrix
+
+    m = _rotation(pitch, yaw)
+    assert pitch_from_matrix(m) == pytest.approx(pitch)
+    assert yaw_from_matrix(m) == pytest.approx(yaw)
 
 
 class _FakeDetector:
-    """Returns the renderer's landmarks with a fixed head angle, like FaceLandmarkDetector."""
+    """Returns the renderer's landmarks with fixed head angles, like FaceLandmarkDetector."""
 
-    def __init__(self, lm, pitch_deg):
-        self.lm, self.pitch_deg = lm, pitch_deg
+    def __init__(self, lm, pitch_deg, yaw_deg):
+        self.lm, self.pitch_deg, self.yaw_deg = lm, pitch_deg, yaw_deg
 
     def detect(self, rgb, timestamp_ms=None):
         return self.lm
 
 
-def test_geometry_carries_the_detector_pitch_to_the_report(tmp_path):
+def test_geometry_carries_the_detector_angles_to_the_report(tmp_path):
     rgb, lm, _ = synthetic.render(synthetic.Scene(width=1280, height=720, face_height=0.32, center=(0.5, 0.5), **SIDE))
     live, lm_live = to_live(rgb, lm)
-    pipeline, settings = Pipeline(_FakeDetector(lm_live, 6.5)), Settings()
+    pipeline, settings = Pipeline(_FakeDetector(lm_live, 6.5, -2.5)), Settings()
     ctx, _ = pipeline.process(live, settings, full_frame=rgb)
-    assert ctx.geometry["pitch_deg"] == 6.5
+    assert (ctx.geometry["pitch_deg"], ctx.geometry["yaw_deg"]) == (6.5, -2.5)
     result = pipeline.render_final(rgb, ctx, settings)
     folder, _ = geometry.save_outputs(result, tmp_path)
-    assert json.loads((folder / "report.json").read_text())["geometry"]["pitch_deg"] == 6.5
+    saved = json.loads((folder / "report.json").read_text())["geometry"]
+    assert (saved["pitch_deg"], saved["yaw_deg"]) == (6.5, -2.5)
 
 
-def test_pitch_is_none_without_a_detector():
+def test_angles_are_none_without_a_detector():
     rgb, lm, _ = synthetic.render(synthetic.Scene(**SIDE))
     ctx, _ = Pipeline().process(rgb, Settings(), landmarks=lm)
-    assert ctx.geometry["pitch_deg"] is None
+    assert ctx.geometry["pitch_deg"] is None and ctx.geometry["yaw_deg"] is None
 
 
 @needs_model
-def test_mediapipe_pitch_follows_the_head_tilt():
+@pytest.mark.parametrize("axis", ["pitch", "yaw"])  # pitch + tilts the chin down, yaw + turns to the image right
+def test_mediapipe_angles_follow_the_head(axis):
     from idphoto.landmarks import FaceLandmarkDetector
 
     detector = FaceLandmarkDetector(video=False)
     found = {}
-    for deg in (-15.0, 0.0, 15.0):  # + tilts the chin down
-        rgb, _, _ = synthetic.render(synthetic.Scene(width=1280, height=720, pitch=deg, **SIDE))
+    for deg in (-15.0, 0.0, 15.0):
+        rgb, _, _ = synthetic.render(synthetic.Scene(width=1280, height=720, **{axis: deg}, **SIDE))
         assert detector.detect(rgb) is not None
-        found[deg] = detector.pitch_deg
-    assert detector.detect(np.zeros((480, 640, 3), np.uint8)) is None and detector.pitch_deg is None
+        found[deg] = getattr(detector, f"{axis}_deg")
+    assert detector.detect(np.zeros((480, 640, 3), np.uint8)) is None
+    assert detector.pitch_deg is None and detector.yaw_deg is None
     detector.close()
     assert found[-15.0] < found[0.0] < found[15.0]
     assert all(abs(found[d] - d) < 5.0 for d in found)
