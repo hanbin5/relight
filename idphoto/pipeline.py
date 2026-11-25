@@ -65,8 +65,10 @@ class Pipeline:
             ctx.full_frame = full_frame
         ctx.linear_rgb = color.decode_u8(raw)
         ctx.Y = color.luminance(ctx.linear_rgb)
+        pitch_deg = None  # only MediaPipe's own detection gives a head angle
         if landmarks is None and self.detector is not None:
             landmarks = self.detector.detect(raw, timestamp_ms)
+            pitch_deg = getattr(self.detector, "pitch_deg", None)
         ctx.landmarks = landmarks
         t.append(time.perf_counter())
 
@@ -79,6 +81,7 @@ class Pipeline:
             fmt = geometry.FORMATS[settings.format]
             geo["crop_box"] = geometry.crop_box(geo, fmt, settings.head_share[settings.format])
             geo["crop_fits"] = geometry.crop_fits(geo["crop_box"], ctx.size)
+            geo["pitch_deg"] = pitch_deg
             ctx.geometry = geo
         else:
             self.tracker.reset()
@@ -114,6 +117,7 @@ class Pipeline:
             background = None
         Matter().process(ctx, background, update=False, fast=False)
         geo = geometry.measure(ctx.landmarks, ctx.alpha)
+        geo["pitch_deg"] = (live.geometry or {}).get("pitch_deg")  # the live frame's angle
         ctx.geometry = geo
         pad = background if background is not None else ctx.wall_color
         photos, sheets, boxes = {}, {}, {}
@@ -139,6 +143,7 @@ class Pipeline:
                          "chin": [float(x) for x in geo["chin"]],
                          "head_length_px": geo["head_length"], "crown_source": geo["crown_source"],
                          "roll_deg": geo["roll_deg"], "yaw_ratio": geo["yaw_ratio"], "pitch_ratio": geo["pitch_ratio"],
+                         "pitch_deg": _num(geo["pitch_deg"]),
                          "crop_boxes": {k: [float(x) for x in b] for k, b in boxes.items()},
                          "crop_fits": {k: geometry.crop_fits(b, ctx.size) for k, b in boxes.items()}},
             "frame_size": list(ctx.size),

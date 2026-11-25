@@ -158,6 +158,33 @@ def test_pitch_is_the_rotation_about_the_x_axis(deg):
     assert pitch_from_matrix(m.tolist()) == pytest.approx(deg)
 
 
+class _FakeDetector:
+    """Returns the renderer's landmarks with a fixed head angle, like FaceLandmarkDetector."""
+
+    def __init__(self, lm, pitch_deg):
+        self.lm, self.pitch_deg = lm, pitch_deg
+
+    def detect(self, rgb, timestamp_ms=None):
+        return self.lm
+
+
+def test_geometry_carries_the_detector_pitch_to_the_report(tmp_path):
+    rgb, lm, _ = synthetic.render(synthetic.Scene(width=1280, height=720, face_height=0.32, center=(0.5, 0.5), **SIDE))
+    live, lm_live = to_live(rgb, lm)
+    pipeline, settings = Pipeline(_FakeDetector(lm_live, 6.5)), Settings()
+    ctx, _ = pipeline.process(live, settings, full_frame=rgb)
+    assert ctx.geometry["pitch_deg"] == 6.5
+    result = pipeline.render_final(rgb, ctx, settings)
+    folder, _ = geometry.save_outputs(result, tmp_path)
+    assert json.loads((folder / "report.json").read_text())["geometry"]["pitch_deg"] == 6.5
+
+
+def test_pitch_is_none_without_a_detector():
+    rgb, lm, _ = synthetic.render(synthetic.Scene(**SIDE))
+    ctx, _ = Pipeline().process(rgb, Settings(), landmarks=lm)
+    assert ctx.geometry["pitch_deg"] is None
+
+
 @needs_model
 def test_mediapipe_pitch_follows_the_head_tilt():
     from idphoto.landmarks import FaceLandmarkDetector
