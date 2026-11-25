@@ -61,13 +61,13 @@ SHARPNESS_CROP = 256
 SHARPNESS_WINDOW = 90  # recent frames that calibrate the camera (about 5 s)
 SHARPNESS_WARMUP = 15  # frames before the calibration applies
 SHARPNESS_REL = 0.7  # a frame must reach 70% of the camera's sharp frames ...
-SHARPNESS_FLOOR = 15.0  # ... and never less than this
+SHARPNESS_FLOOR = 8.0  # ... and never less than this (was 15: one real webcam scores 14 on a sharp photo, about 1 when blurred)
 ROLL_MAX_DEG = 2.5  # rule 4
 YAW_RATIO_MAX = 0.06  # rule 4
-PITCH_RATIO_RANGE = (0.85, 1.15)  # rule 4, relative to the canonical face (1.0 = level)
+PITCH_RATIO_RANGE = (0.94, 1.17)  # rule 4, relative to the canonical face (1.0 = level); about -5 to +12.5 degrees on the synthetic face
 EAR_MIN = 0.23  # rule 5
 LIP_GAP_MAX = 0.03  # rule 6
-UNCERTAIN_MAX = 0.02  # rule 7: 0.1 < alpha < 0.9 outside the hair band
+UNCERTAIN_MAX = 0.03  # rule 7: 0.1 < alpha < 0.9 outside the hair band (was 2%: good real photos measure 1.4-2.4%)
 CONTRAST_MIN = 0.12  # rule 7: person-wall contrast at the shoulder line
 SHUTTER_FRAMES = 5  # auto shutter: all rules pass for 5 frames in a row
 
