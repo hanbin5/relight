@@ -44,7 +44,10 @@ def encode_u8(lin: np.ndarray) -> np.ndarray:
     if _ENCODE_LUT is None:
         grid = np.linspace(0.0, 1.0, _ENCODE_STEPS, dtype=np.float32)
         _ENCODE_LUT = np.round(linear_to_srgb(grid) * 255.0).astype(np.uint8)
-    idx = np.fmin(np.fmax(lin, 0.0), 1.0) * (_ENCODE_STEPS - 1) + 0.5
+    idx = np.fmax(lin, 0.0)  # a new array, so the caller's image is never touched
+    np.fmin(idx, 1.0, out=idx)
+    idx *= _ENCODE_STEPS - 1
+    idx += 0.5
     return _ENCODE_LUT[idx.astype(np.int32)]
 
 

@@ -87,7 +87,7 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (190 tests, about 15 s).
+Tests: `uv run pytest` (192 tests, about 15 s).
 
 ## Results so far
 
