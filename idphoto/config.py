@@ -82,15 +82,7 @@ CROWN_MASK_AGREE = (0.85, 1.25)  # the measured mask top is trusted only within 
 # into the wall or a hat; outside the band the proportion rule is used instead. The band is
 # wide enough for the hairstyles above (hair top at 0.99-1.13 x the proportion).
 
-# EXPERIMENTAL, not the default and not validated: CROP_MODE = "face" sizes the photo by chin
-# to skull top (the proportion rule without hair), so faces come out the same size whatever the
-# hairstyle, and uses the hair top only to keep the hair inside the photo. The skull proportion
-# itself fitted k = 1.84-2.02 over three people (about 10%; only one skull was seen under a cap,
-# the other two were marked through the hair), so this waits for more data.
-# Per-format shares are in geometry.FORMATS.
-CROP_MODE = "head"  # "head" (plan B.5): the head with its hair fills head_share of the photo
-HAIR_MARGIN_MIN = 0.04  # face mode: least room above the hair, 4% of the height (1.6 mm on a
-# 40 mm photo), so hair never touches the edge
-CHIN_MAX = 0.92  # face mode: the chin sits no lower than 92%, leaving at least 3 mm of neck
+# The head with its hair fills head_share of the photo (plan B.5); the per-format shares are in
+# geometry.FORMATS.
 PRINT_DPI = 300
 SHEET_PX = (1800, 1200)  # 6 x 4 in landscape at 300 DPI (w, h)
