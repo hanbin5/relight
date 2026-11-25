@@ -92,7 +92,7 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (195 tests, about 17 s).
+Tests: `uv run pytest` (197 tests, about 17 s).
 
 ## Results so far
 
@@ -127,6 +127,7 @@ These are choices made while implementing the drafts in Appendix B. Each is comm
 15. **Rule 7 fallback (C.4):** if the cutout check fails when a photo is taken, the saved photo keeps the original wall and the result window says so.
 16. **Print sheets** are made for the résumé and ID formats; the profile photo is for screens.
 17. **Rule 1 shadow share** is measured below the eyes and 4 px inside the face edge (on the 128 × 128 grid), not over the whole face. On real photos, bangs and hair at the temples fall inside the face outline and counted as shadow (9–33% on our 11 test photos, limit 5%); now they measure 0–2%. A side shadow still shows: an unrelit side-lit face gives 13–38%.
+18. **Rule 4 pitch** uses MediaPipe's head angle in degrees (−5° to +12.5°) when `ctx.geometry` has `pitch_deg`, and the 10–1–152 ratio only as a fallback without a detector (synthetic faces, replays). The ratio depends on face shape: on our test photos a 10° tilt read 1.30–1.44 on real faces but about 1.13 on the canonical face, so most good photos failed. `pitch_deg` comes from module C's landmark detector (requested).
 
 ## Not done yet
 
