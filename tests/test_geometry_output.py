@@ -30,7 +30,6 @@ def test_crown_follows_the_proportion_rule():
     assert source == "proportion"
 
 
-
 def test_crown_is_the_mask_top_when_the_proportion_agrees(monkeypatch):
     rgb, lm, person = synthetic.render(synthetic.Scene(**SIDE))
     alpha = person.astype(np.float32)
@@ -46,45 +45,6 @@ def test_crown_is_the_mask_top_when_the_proportion_agrees(monkeypatch):
     assert source == "proportion"
     np.testing.assert_allclose(crown, cues["proportion"])
 
-
-@pytest.mark.parametrize("key", list(geometry.FORMATS))
-def test_face_mode_sizes_the_face_from_the_skull(key):
-    fmt = geometry.FORMATS[key]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))  # no mask: crown = skull
-    crop = geometry.face_crop(geo, fmt)
-    x0, y0, x1, y1 = crop["box"]
-    assert crop["action"] == "fits"
-    assert (x1 - x0) / (y1 - y0) == pytest.approx(fmt.size_px[0] / fmt.size_px[1])
-    assert crop["face_share"] == pytest.approx(fmt.face_share)
-    assert (geo["skull"][1] - y0) / (y1 - y0) == pytest.approx(fmt.skull_top)
-    assert geometry.crop_box(geo, fmt, mode="face") == crop["box"]
-
-
-def test_face_mode_keeps_big_hair_inside_the_photo():
-    fmt = geometry.FORMATS["resume"]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
-    face = float(np.linalg.norm(geo["chin"] - geo["skull"]))
-    for extra, action in ((0.18, "moved"), (0.40, "zoomed")):
-        big = {**geo, "crown": geo["skull"] - np.float32([0, extra * face])}
-        crop = geometry.face_crop(big, fmt)
-        x0, y0, x1, y1 = crop["box"]
-        assert crop["action"] == action
-        assert crop["hair_top"] == pytest.approx(config.HAIR_MARGIN_MIN)
-        assert crop["chin"] <= config.CHIN_MAX + 1e-6
-
-
-
-@pytest.mark.parametrize("share", [0.80, 0.90])
-def test_face_mode_never_cuts_off_the_chin(share):
-    fmt = geometry.FORMATS["resume"]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
-    crop = geometry.face_crop(geo, fmt, share)
-    assert crop["chin"] <= config.CHIN_MAX + 1e-6
-    assert crop["hair_top"] >= config.HAIR_MARGIN_MIN - 1e-6
-    # The face keeps its size unless chin and hair cannot both fit; then the crop zooms out.
-    assert crop["face_share"] <= share + 1e-6
-    if crop["action"] != "zoomed":
-        assert crop["face_share"] == pytest.approx(share)
 
 def test_print_sheets_fit_ten_and_eight_photos():
     for key, count in (("resume", 10), ("id", 8)):
