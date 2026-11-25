@@ -145,3 +145,30 @@ def test_mediapipe_finds_the_synthetic_face_where_the_renderer_put_it():
     assert found is not None and found.shape == (478, 3)
     face_width = lm[454, 0] - lm[234, 0]
     assert np.linalg.norm(found[:468, :2] - lm[:468, :2], axis=1).mean() < 0.04 * face_width
+
+
+@pytest.mark.parametrize("deg", [-20.0, 0.0, 12.5])
+def test_pitch_is_the_rotation_about_the_x_axis(deg):
+    from idphoto.landmarks import pitch_from_matrix
+
+    a = np.radians(deg)
+    m = np.eye(4)
+    m[1:3, 1:3] = [[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]
+    m[:3, 3] = (1.0, -2.0, -40.0)  # the translation does not matter
+    assert pitch_from_matrix(m.tolist()) == pytest.approx(deg)
+
+
+@needs_model
+def test_mediapipe_pitch_follows_the_head_tilt():
+    from idphoto.landmarks import FaceLandmarkDetector
+
+    detector = FaceLandmarkDetector(video=False)
+    found = {}
+    for deg in (-15.0, 0.0, 15.0):  # + tilts the chin down
+        rgb, _, _ = synthetic.render(synthetic.Scene(width=1280, height=720, pitch=deg, **SIDE))
+        assert detector.detect(rgb) is not None
+        found[deg] = detector.pitch_deg
+    assert detector.detect(np.zeros((480, 640, 3), np.uint8)) is None and detector.pitch_deg is None
+    detector.close()
+    assert found[-15.0] < found[0.0] < found[15.0]
+    assert all(abs(found[d] - d) < 5.0 for d in found)
