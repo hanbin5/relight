@@ -206,7 +206,8 @@ class Relighter:
 
         ctx.normals, ctx.face_box, ctx.light_coeffs = normals, box, light
         ctx.ratio_map = ratio_map
-        ctx.relit_frame = np.minimum(ctx.linear_rgb * ratio_map[..., None], 1.0)
+        ctx.relit_frame = ctx.linear_rgb * ratio_map[..., None]
+        np.minimum(ctx.relit_frame, 1.0, out=ctx.relit_frame)
 
         relit_grid = Yc * grid
         fitted_grid = np.zeros((S, S), np.float32)

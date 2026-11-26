@@ -117,6 +117,16 @@ def _run(rgb, lm, frames=5, **kw):
     return ctx, relighter
 
 
+def test_relit_frame_is_a_new_array_and_the_input_frame_is_untouched(side_lit):
+    rgb, lm, _ = side_lit
+    ctx = make_ctx(rgb, lm)
+    before = ctx.linear_rgb.copy()
+    Relighter().process(ctx)
+    assert ctx.relit_frame is not ctx.linear_rgb
+    np.testing.assert_array_equal(ctx.linear_rgb, before)
+    np.testing.assert_allclose(ctx.relit_frame, np.minimum(before * ctx.ratio_map[..., None], 1.0))
+
+
 def test_ratio_stays_in_the_clip_range_and_the_frame_stays_valid(side_lit):
     rgb, lm, _ = side_lit
     ctx, _ = _run(rgb, lm)

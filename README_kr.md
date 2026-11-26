@@ -2,7 +2,9 @@
 
 # Module B 옷 영역 복원 실험
 
-![대표 사진의 원본과 옷 영역 실험 결과](docs/evaluation/clothing/research-gamma/live/comparison.jpg)
+비교 이미지와 `test9.jpg`는 저장소에 배포하지 않습니다. 12장 평가를 재현하려면 적절한 동의를 확인한 로컬 입력이 필요합니다.
+
+
 
 기존 배경 분리 과정이 익숙하지 않다면 먼저 [Module B 배경 분리 설명](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)을 읽어 주세요. 이 문서는 기존 과정을 반복하지 않고, 빠진 옷을 복원하기 위해 시도한 방법과 그 결과를 설명합니다. 변경은 오프라인 실험에만 머물지 않고 앱의 `idphoto/matting.py`에 적용되어 있습니다.
 
@@ -142,7 +144,7 @@ uv run --extra fba --group dev python -m tools.eval_fba_combinations --full-grid
 
 `Previous clothing`은 직전 앱 코드 `4276adf6a4cba13d0b98f4a8e333498e8a5c40db`, `Clothing (NumPy)`는 현재 근접 촬영 보정을 포함한 앱 코드입니다. `FBA`는 Main alpha로, `NumPy + FBA`는 현재 옷 alpha로 **같은 규칙으로 만든 자동 트라이맵**을 받아 원본 사진을 처리합니다. SCHP와 Sapiens는 FBA가 아닌 **Main alpha**에 파싱 결과를 결합합니다. `clothing`은 옷 클래스만, `person`은 머리카락을 포함한 전체 인물 예측을 사용합니다. 여기서 Sapiens는 비율 보존 검은 패딩과 고정 감마 0.55를 모델 입력에만 적용합니다.
 
-12장의 동일한 640 px 너비 입력과 랜드마크로 라이브(`s=2`) 및 [전체 격자 `s=1`](docs/evaluation/clothing/research-gamma/full-grid/comparison.jpg)를 평가했습니다. [라이브 CSV](docs/evaluation/clothing/research-gamma/live/measurements.csv)와 [전체 격자 CSV](docs/evaluation/clothing/research-gamma/full-grid/measurements.csv)에 12장 모두 남겼습니다. `shot2`–`shot4`는 비슷한 장면이라 그림에는 대표인 `shot2`만 표시합니다. 아래 관찰의 좌우는 사진을 보는 방향입니다.
+12장의 동일한 640 px 너비 입력과 랜드마크로 라이브(`s=2`) 및 전체 격자 `s=1` (로컬 이미지)를 평가했습니다. [라이브 CSV](docs/evaluation/clothing/research-gamma/live/measurements.csv)와 [전체 격자 CSV](docs/evaluation/clothing/research-gamma/full-grid/measurements.csv)에 12장 모두 남겼습니다. `shot2`–`shot4`는 비슷한 장면이라 그림에는 대표인 `shot2`만 표시합니다. 아래 관찰의 좌우는 사진을 보는 방향입니다.
 
 | 사진 | NumPy 옷과 배경 | SCHP person | Sapiens 패딩 + 감마 person | Sapiens 대 SCHP 픽셀: 라이브; 전체 격자 |
 |---|---|---|---|---|
@@ -179,11 +181,11 @@ uv run --extra fba --group dev python -m tools.eval_fba_combinations --full-grid
 
 입력은 RGB 1024 × 768이며 평균 `[123.5, 116.5, 103.5]`, 표준편차 `[58.5, 57, 57.5]`로 정규화합니다. apparel·하의·상의 확률(클래스 1·12·22)을 합하고 배경은 클래스 0을 씁니다. 두 파서에 위에서 설명한 같은 Main-alpha 결합을 쓰지만 임계값은 SCHP를 보며 정했고 클래스 정의와 확률 보정도 다를 수 있어 모델만 바꾼 공정한 통제 비교는 아닙니다.
 
-12장과 두 격자에서 전체 프레임의 세 입력을 시험했습니다: [공식 데모 방식 늘이기](docs/evaluation/clothing/research-v2/live/comparison.jpg)([전체 격자](docs/evaluation/clothing/research-v2/full-grid/comparison.jpg)), [비율 보존 검은 패딩](docs/evaluation/clothing/research-letterbox/live/comparison.jpg)([전체 격자](docs/evaluation/clothing/research-letterbox/full-grid/comparison.jpg)), 패딩과 고정 감마 0.55(맨 위 결과). 각 디렉터리에 12행 CSV도 있습니다. 늘이기는 shot5와 test1/2/3/4/8의 옷을 대부분 잃었습니다. 패딩은 shot5와 test3을 복원했지만 test1/2/4의 옷을 대부분 지우고 test5/6에 구멍, test8에 얼룩을 남겼습니다. 같은 사진을 보고 추가한 감마는 패딩만 쓴 경우보다 test1/8의 옷 일부를 되찾았지만 test2/4는 여전히 상의 거의 전체가 사라지고 test5/6에도 큰 구멍이 남습니다. 감마는 모델 입력에만 적용하고 합성은 원본 RGB를 사용합니다. 어떤 변형도 앱에 넣기 적합하지 않았습니다.
+12장과 두 격자에서 전체 프레임의 세 입력을 시험했습니다: 공식 데모 방식 늘이기 (로컬 이미지)(전체 격자 (로컬 이미지)), 비율 보존 검은 패딩 (로컬 이미지)(전체 격자 (로컬 이미지)), 패딩과 고정 감마 0.55(맨 위 결과). 각 디렉터리에 12행 CSV도 있습니다. 늘이기는 shot5와 test1/2/3/4/8의 옷을 대부분 잃었습니다. 패딩은 shot5와 test3을 복원했지만 test1/2/4의 옷을 대부분 지우고 test5/6에 구멍, test8에 얼룩을 남겼습니다. 같은 사진을 보고 추가한 감마는 패딩만 쓴 경우보다 test1/8의 옷 일부를 되찾았지만 test2/4는 여전히 상의 거의 전체가 사라지고 test5/6에도 큰 구멍이 남습니다. 감마는 모델 입력에만 적용하고 합성은 원본 RGB를 사용합니다. 어떤 변형도 앱에 넣기 적합하지 않았습니다.
 
 Apple M4 Pro, RAM 24 GiB, Python 3.12.13, PyTorch 2.15.0, ONNX Runtime 1.32.0에서 한 번 측정한 패딩 라이브 결과의 추론·전후처리 중앙값은 Sapiens MPS 약 1.6초, SCHP CPU 약 0.18초였습니다. 장치가 다르고 모델 로딩·결합·나머지 앱 시간은 제외된 탐색적 수치입니다. 동일 shot5 입력의 실제 CPU와 MPS Sapiens 옷/배경 확률 최대 차이는 0.000023 이하였고 두 확률의 0.5 판정 차이는 없었습니다.
 
-**HSV·기하·연결성 후보.** 별도의 오프라인 NumPy 가설로 HSV 배경 색을 모델링하고 얼굴 기반 중앙 몸통을 보호한 뒤, 배경 표본과 연결된 유사 색 영역을 얼굴 연결성 정리 전에 제거했습니다. 전체 포즈 추정 논문을 그대로 재현한 것은 아닙니다. [라이브](docs/evaluation/clothing/hsv-probe/live/comparison.jpg)와 [전체 격자](docs/evaluation/clothing/hsv-probe/full-grid/comparison.jpg) 비교 및 CSV에 12장 모두 포함했습니다. 현재 NumPy 대비 alpha 0.5 기준 제거된 픽셀 합은 각각 12,889개와 26,669개지만 정답이 없어 옷과 배경을 구분하는 수치가 아닙니다.
+**HSV·기하·연결성 후보.** 별도의 오프라인 NumPy 가설로 HSV 배경 색을 모델링하고 얼굴 기반 중앙 몸통을 보호한 뒤, 배경 표본과 연결된 유사 색 영역을 얼굴 연결성 정리 전에 제거했습니다. 전체 포즈 추정 논문을 그대로 재현한 것은 아닙니다. 라이브 (로컬 이미지)와 전체 격자 (로컬 이미지) 비교 및 CSV에 12장 모두 포함했습니다. 현재 NumPy 대비 alpha 0.5 기준 제거된 픽셀 합은 각각 12,889개와 26,669개지만 정답이 없어 옷과 배경을 구분하는 수치가 아닙니다.
 
 `tests/test_hsv_probe.py`의 정답이 있는 합성 반례에서는 벽과 비슷한 소매 2,150픽셀 중 현재 NumPy가 라이브 2,020개·전체 격자 1,997개를 남긴 반면 후보는 692개·679개만 남겼고, 이 장면에서 배경 제거는 **0개**였습니다. 마스크가 작아진 것을 개선으로 간주하지 않고 후보를 기각했습니다. 앱의 기존 근접 보정은 유지하며 새 후보로 앱 코드를 바꾸지 않았습니다.
 
@@ -313,15 +315,15 @@ FBA는 사진만이 아니라 확정 전경·확정 배경·미확정 영역을 
 
 각 alpha를 0.5로 이진화한 뒤 얼굴 너비의 0.06배만큼 침식한 안쪽과 얼굴 마스크를 확정 전경으로 지정합니다. 이진 마스크를 얼굴 너비의 0.5배만큼 팽창한 바깥은 확정 배경으로 지정하되, 턱 아래 랜드마크로 잡은 넉넉한 몸통 영역 안은 확정 전경을 제외하고 미확정으로 둡니다. 몸통 영역의 반폭은 턱부터 눈–턱 거리만큼 내려가면서 얼굴 너비의 1배에서 3.5배까지 정규화 거리의 제곱근에 따라 넓어집니다. 침식과 팽창에는 정사각형 창을 쓰며 반경은 픽셀 단위로 반올림하고 최소 1 px로 둡니다.
 
-![FBA 입력, 자동 트라이맵과 alpha](docs/evaluation/clothing/fba/trimap.jpg)
+
 
 두 결과는 각각 **main 또는 옷 개선 마스크와 랜드마크에 조건화된 FBA**이며 독립적인 자동 분할 기준선이나 사람이 수정한 트라이맵이 아닙니다. 배경을 확정 전경으로 잘못 지정하면 지울 수 없고, 옷을 확정 배경으로 지정하면 복원할 수 없습니다. 옷 개선에서 잘못 포함된 배경이 결합 트라이맵의 확정 전경이 되면 FBA도 그 배경을 지우지 못할 수 있습니다. 넓은 몸통 미확정 영역은 기존 마스크 바깥 소매를 FBA가 판단할 기회를 주지만 벽 누출도 허용합니다. main 기반 라이브 트라이맵의 미확정 비율은 31.1–59.7%, 중앙값 42.5%로, 입력의 특성이지 품질 점수가 아닙니다. shot2에서는 결합으로 재킷이 더 불투명해지지만 test6과 test9에서는 배경도 더 진해지므로, 결합이 항상 나은 결과라고 판단할 수 없습니다.
 
 FBA도 앱 비교와 같은 640 px 입력을 쓰며 CPU 스레드 4개, 타일 크기 1024 px로 처리했습니다. 12장 모두 타일 하나에 들어가며, 8의 배수가 되도록 패딩해 입력 픽셀 격자를 유지합니다. 확정 트라이맵을 강제하고 FBA가 추정한 전경과 alpha를 sRGB에서 흰 배경에 합성했으며 추가 후처리는 하지 않았습니다. 앱은 선형광 합성과 자체 spill 제거를 사용하므로 합성 색상까지 완전히 같은 조건은 아닙니다. 기존 라이브 단일 실행에서 FBA 호출 시간은 중앙값 291 ms(234–1,491 ms), 기존 결합 FBA 호출은 292 ms(236–683 ms)였습니다. 기존 결합과 Guarded FBA는 같은 모델의 후속 호출이며, Guarded FBA는 첫 FBA 결과도 필요합니다. 이 수치는 모델 로딩·트라이맵 생성·랜드마크 검출·입력 마스크 생성을 제외하며 공정한 속도 비교나 전체 파이프라인 시간, 실시간 성능을 뜻하지 않습니다.
 
-라이브는 640 px 입력에서 색 판정과 필터 계수를 **절반 격자 `s=2`**로 계산합니다. [전체 격자 비교](docs/evaluation/clothing/full-grid-fba/comparison.jpg)는 **같은 640 px 입력**에 촬영 알고리즘의 `s=1`을 적용하고 해당 main 및 옷 개선 alpha에서 두 트라이맵을 다시 만듭니다. 옷 개선 단독 결과에서 shot2와 shot4의 어깨는 이 경로에서 여전히 조각나고, shot3은 라이브보다 많이 추가됩니다. **원본 해상도 저장 결과를 평가한 것이 아니며**, 두 경로의 경계가 같다는 뜻도 아닙니다.
+라이브는 640 px 입력에서 색 판정과 필터 계수를 **절반 격자 `s=2`**로 계산합니다. 전체 격자 비교 (로컬 이미지)는 **같은 640 px 입력**에 촬영 알고리즘의 `s=1`을 적용하고 해당 main 및 옷 개선 alpha에서 두 트라이맵을 다시 만듭니다. 옷 개선 단독 결과에서 shot2와 shot4의 어깨는 이 경로에서 여전히 조각나고, shot3은 라이브보다 많이 추가됩니다. **원본 해상도 저장 결과를 평가한 것이 아니며**, 두 경로의 경계가 같다는 뜻도 아닙니다.
 
-[전체 격자 FBA 트라이맵과 alpha](docs/evaluation/clothing/full-grid-fba/trimap.jpg), [main과 개선 후의 라이브 alpha 비교](docs/evaluation/clothing/comparison.jpg)도 확인할 수 있습니다.
+전체 격자 FBA 트라이맵과 alpha (로컬 이미지), main과 개선 후의 라이브 alpha 비교 (로컬 이미지)도 확인할 수 있습니다.
 
 [라이브 CSV](docs/evaluation/clothing/measurements.csv)와 [전체 격자 CSV](docs/evaluation/clothing/full-grid/measurements.csv)에는 12장 각각의 임계값, 표본 후보 수, 적용 여부와 단일 실행 시간이 있습니다. 전체 합계는 라이브에서 추가 161,275개·제거 9개, 전체 격자에서 추가 122,211개·제거 6개입니다. 제거는 기존 alpha가 0.5를 넘고 개선 후 0.5 이하가 된 픽셀입니다. 이진 마스크에는 정리 **전** 추가만 하지만, 이후 정리와 guided filter를 다시 계산하면 기존 경계도 달라질 수 있습니다.
 
@@ -352,7 +354,7 @@ FBA도 앱 비교와 같은 640 px 입력을 쓰며 CPU 스레드 4개, 타일 �
 3. 옷용 전경·배경 색 모델을 별도로 만들고, 옷 탐색 영역에서 색 거리와 몸통 prior를 결합합니다. 옷 점수가 기존 Otsu 임계값을 넘고 옷 모델과의 거리가 2.5 미만인 픽셀만 추가합니다.
 4. 추가 판정을 기존 이진 마스크에 합친 뒤 기존 opening/closing, 얼굴 연결, 구멍 채우기와 guided filter를 실행합니다. 기존 머리 색 모델과 원래 점수의 정의는 바꾸지 않았지만, 뒤의 연결·경계 처리 결과까지 픽셀 단위로 같다는 보장은 없습니다.
 
-![shot2와 test5의 배경·옷 표본 후보](docs/evaluation/clothing/sample-regions.jpg)
+
 
 test5에서 기존 배경 후보 49,352개 중 4,607개가 보호 구역 때문에 옷용 배경 후보에서 빠져 44,745개가 남습니다. 파란 영역에는 벽도 포함되며, 모두 오염된 표본이거나 모두 옷이라는 뜻은 아닙니다. 초록 영역도 옷이라고 보장된 영역은 아닙니다.
 
@@ -422,7 +424,7 @@ uv run --extra fba pytest -q
 
 명령은 저자의 소스와 약 139 MB 가중치를 Git에서 제외된 `models/fba/`에 내려받으며 사진은 로컬에 남습니다. 어댑터는 소스 리비전 `8dd100d760186150710510ee8d78ed916cdb17a4`와 가중치 SHA-256 `f3f8a2b6cefd7200368b6008a712468ed1debc6658693db31b0f719f658a2967`을 검증하고 `weights_only=True`로 가중치를 읽습니다. FBA 실행은 Guarded FBA를 포함한 비교 그림 한 장, 트라이맵·alpha 비교 그림 한 장과 CSV를 출력합니다. 자료나 트라이맵이 없거나 잘못되면 다른 방법으로 조용히 대체하지 않고 오류를 냅니다.
 
-랜드마크는 이미지 모드로 검출해 기본적으로 `out/clothing-landmarks/`에 캐시하고, 각 사진의 전후 비교에 같은 값을 씁니다. 캐시는 Git에 포함되지 않습니다. 새 환경이나 새 `--cache` 디렉터리에서 다시 검출하면 랜드마크와 수치가 달라질 수 있습니다. 사진이나 얼굴을 찾지 못하면 조용히 제외하지 않고 오류로 종료합니다. `test9.jpg`는 `module-b/person-prior`의 `e8e798c8eee3118bebba4ba8f34c37808f84c250`에서 원본 그대로 가져왔습니다.
+랜드마크는 이미지 모드로 검출해 기본적으로 `out/clothing-landmarks/`에 캐시하고, 각 사진의 전후 비교에 같은 값을 씁니다. 캐시는 Git에 포함되지 않습니다. 새 환경이나 새 `--cache` 디렉터리에서 다시 검출하면 랜드마크와 수치가 달라질 수 있습니다. 사진이나 얼굴을 찾지 못하면 조용히 제외하지 않고 오류로 종료합니다.
 
 이전 FBA 실험의 검증에서는 전체 215개, matting/checker 45개 테스트가 통과했습니다. main과 개선 후의 CSV 시간은 매팅 단계의 단일 초기 실행값으로, 이미지 로딩·랜드마크·relighting을 포함하지 않는 진단값입니다. 지연시간 보장이나 10 fps 달성을 뜻하지 않습니다.
 

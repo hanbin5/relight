@@ -98,6 +98,13 @@ def test_encode_u8_clips_and_handles_float64():
     assert out.dtype == np.uint8 and out.tolist() == [0, 0, 255, 255]
 
 
+def test_encode_u8_does_not_modify_its_input():
+    lin = np.array([[-1.0, 0.25, 0.5, 7.0]], np.float32)
+    before = lin.copy()
+    color.encode_u8(lin)
+    np.testing.assert_array_equal(lin, before)
+
+
 def test_encode_u8_treats_nan_as_black_instead_of_crashing():
     out = color.encode_u8(np.array([np.nan, 1.0, np.inf, -np.inf], np.float32))
     assert out.tolist() == [0, 255, 255, 0]

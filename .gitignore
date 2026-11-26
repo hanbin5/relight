@@ -8,6 +8,9 @@ models/
 # volunteer test photos (plan C.1): keep local, delete after the semester
 testset/
 # Experimental comparisons may contain identifiable people; keep them local.
+docs/evaluation/clothing/**/*.jpg
+docs/evaluation/clothing/*.jpg
+docs/evaluation/test/test9.jpg
 docs/evaluation/clothing/fba-combinations/**/*.jpg
 docs/evaluation/clothing/fba-leakage/**/*.jpg
 docs/evaluation/clothing/shape-priors/**/*.jpg

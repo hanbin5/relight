@@ -32,8 +32,7 @@ class Settings:
     """User choices from the GUI; read by the pipeline every frame."""
 
     format: str = "resume"
-    # head share in head mode, face share in face mode (config.CROP_MODE)
-    head_share: dict = field(default_factory=lambda: {k: geometry.default_share(f) for k, f in geometry.FORMATS.items()})
+    head_share: dict = field(default_factory=lambda: {k: f.head_share for k, f in geometry.FORMATS.items()})
     background: str = "white"
     strength: float = config.DEFAULT_STRENGTH
     auto_shutter: bool = True
@@ -70,8 +69,10 @@ class Pipeline:
             ctx.full_frame = full_frame
         ctx.linear_rgb = color.decode_u8(raw)
         ctx.Y = color.luminance(ctx.linear_rgb)
+        angles = {"pitch_deg": None, "yaw_deg": None}  # only MediaPipe's own detection gives them
         if landmarks is None and self.detector is not None:
             landmarks = self.detector.detect(raw, timestamp_ms)
+            angles = {k: getattr(self.detector, k, None) for k in angles}
         ctx.landmarks = landmarks
         t.append(time.perf_counter())
 
@@ -91,6 +92,7 @@ class Pipeline:
             fmt = geometry.FORMATS[settings.format]
             geo["crop_box"] = geometry.crop_box(geo, fmt, settings.head_share[settings.format])
             geo["crop_fits"] = geometry.crop_fits(geo["crop_box"], ctx.size)
+            geo.update(angles)
             ctx.geometry = geo
         else:
             self.tracker.reset()
@@ -128,6 +130,8 @@ class Pipeline:
         Matter().process(ctx, background, update=False, fast=False, clothing_enabled=settings.clothing_enabled)
         self._apply_fba(ctx, settings, background)
         geo = geometry.measure(ctx.landmarks, ctx.alpha)
+        for k in ("pitch_deg", "yaw_deg"):  # the live frame's angles
+            geo[k] = (live.geometry or {}).get(k)
         ctx.geometry = geo
         pad = background if background is not None else ctx.wall_color
         photos, sheets, boxes = {}, {}, {}
@@ -150,11 +154,11 @@ class Pipeline:
                          "detail": {k: _num(x) for k, x in v.detail.items()}}
                 for v in (live.rule_verdicts or {}).values()
             },
-            "geometry": {"crop_mode": config.CROP_MODE,
-                         "crown": [float(x) for x in geo["crown"]], "skull": [float(x) for x in geo["skull"]],
+            "geometry": {"crown": [float(x) for x in geo["crown"]],
                          "chin": [float(x) for x in geo["chin"]],
                          "head_length_px": geo["head_length"], "crown_source": geo["crown_source"],
                          "roll_deg": geo["roll_deg"], "yaw_ratio": geo["yaw_ratio"], "pitch_ratio": geo["pitch_ratio"],
+                         "pitch_deg": _num(geo["pitch_deg"]), "yaw_deg": _num(geo["yaw_deg"]),
                          "crop_boxes": {k: [float(x) for x in b] for k, b in boxes.items()},
                          "crop_fits": {k: geometry.crop_fits(b, ctx.size) for k, b in boxes.items()}},
             "frame_size": list(ctx.size),
