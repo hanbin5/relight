@@ -48,3 +48,13 @@ def test_synthetic_photos_end_to_end(tmp_path):
         results.append((name, {n for n, v in ctx.rule_verdicts.items() if not v.passed}))
     detector.close()
     assert eval_checker.score(results)[6][4] == 1.0  # the open mouth is caught
+
+
+def test_camera_bounds_follow_the_app_calibration():
+    from idphoto import config
+
+    bounds = eval_checker.camera_bounds({"webcam": [14, 15, 13, 1], "blurry": [5, 6, 4, 1],
+                                         "phone": [200, 210, 190, 4]})
+    assert abs(bounds["webcam"] - 0.7 * 14.4) < 1e-6  # 70% of the 80th percentile
+    assert bounds["blurry"] == config.SHARPNESS_FLOOR  # never below the floor
+    assert bounds["phone"] == config.SHARPNESS_MIN  # never above 120
