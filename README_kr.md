@@ -6,7 +6,121 @@
 
 기존 배경 분리 과정이 익숙하지 않다면 먼저 [Module B 배경 분리 설명](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)을 읽어 주세요. 이 문서는 기존 과정을 반복하지 않고, 빠진 옷을 복원하기 위해 시도한 방법과 그 결과를 설명합니다. 변경은 오프라인 실험에만 머물지 않고 앱의 `idphoto/matting.py`에 적용되어 있습니다.
 
-여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP·Sapiens·FBA는 앱에 연결하지 않은 오프라인 실험이며 Sapiens와 FBA에는 비상업 제한이 있습니다.
+여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP·Sapiens는 오프라인 실험이며 FBA는 아래의 비상업 발표용 옵트인 데모에서도 사용할 수 있습니다. Sapiens와 FBA에는 비상업 제한이 있습니다.
+
+## 앱에서 Main / Clothing 비교
+
+`uv sync --group dev`와 `uv run python tools/fetch_model.py`로 환경과 얼굴 랜드마크 모델을 준비한 뒤 `uv run idphoto --lang ko`를 실행하면 카메라 화면이 열립니다. 카메라 허용이 필요하며 로컬에서만 처리합니다. 카메라 없이 확인하려면 `uv run idphoto --source demo --lang ko`, 정지 사진은 `uv run idphoto --source 사진경로 --lang ko`를 사용합니다.
+
+오른쪽 **배경 분리 비교 → 옷 영역 개선**을 켜면 기존 Clothing 방식(기본값), 끄면 옷 추가 판정 없는 Main 방식입니다. 전환 시 색 모델을 초기화하고 자동 촬영 통과 프레임을 다시 셉니다. 촬영 결과에도 선택한 방식이 적용되며, 배경 점검 실패 시 기존 규칙대로 원래 벽을 유지합니다.
+
+### FBA 수업 발표용 로컬 데모
+
+FBA 코드는 MIT이지만 공개 가중치는 [저자 안내](https://github.com/MarcoForte/FBA_Matting)에 따라 **비상업적 사용만 가능**합니다. 아래 모드는 수업 발표 등 로컬 비상업 데모만을 위한 옵트인 기능이며 제품 기본값이나 가중치 배포 기능이 아닙니다. 기본 앱에는 Torch를 추가하지 않습니다. 저자의 조건을 확인한 뒤 저장소에서:
+
+```bash
+uv sync --extra fba --group dev
+uv run --extra fba python tools/fba_reference.py --accept-noncommercial
+uv run --extra fba idphoto --presentation-fba --lang ko
+# 카메라 대신 사진: --source docs/evaluation/test/shot5.jpg
+```
+
+카메라 권한은 사용자가 직접 허용해야 합니다. `--presentation-fba`를 넣어야 **FBA + Clothing (비상업 발표 전용)**이 보이며 기본은 꺼져 있습니다. 선택하면 같은 프레임에서 Clothing alpha의 자동 트라이맵으로 FBA를 실행하고, FBA 전경색을 선형광으로 변환해 조명 비율을 적용한 뒤 합성합니다. Main은 옷 개선을 끈 상태, Clothing은 옷 개선만 켠 상태입니다. FBA 옵션은 Clothing이 켜져 있을 때만 선택할 수 있습니다. FBA 전경과 alpha는 기존 NumPy 합성과 달라 색상이 일치하지 않을 수 있습니다.
+
+선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유가 표시됩니다. 가중치 검사에 실패하면 다른 결과로 조용히 대체하지 않습니다. 영상과 사진은 외부로 보내지 않습니다.
+
+**FBA는 실시간 영상이 아닙니다.** 기존에는 카메라 획득과 Qt UI는 별도였지만 처리 Worker가 매 프레임 FBA를 기다려 미리보기 갱신이 느려졌습니다. 이제 FBA 선택 시 큰 화면은 계속 **Clothing 실시간 미리보기**이고, 옆의 별도 이미지는 해당 프레임으로 계산한 마지막 **FBA 스냅샷**과 그 프레임의 경과 시간입니다. FBA 작업은 동시에 하나만 실행하며 대기 미리보기는 최신 한 장으로 교체합니다. 이전 프레임의 alpha를 새로운 영상에 덧씌우지 않습니다. 촬영 요청은 대기 미리보기보다 우선하고 촬영 시점의 프레임과 설정으로 전체 해상도 FBA를 별도 실행하므로 시간이 더 걸릴 수 있습니다. 촬영 중 상태가 표시되며 중복 촬영은 허용하지 않습니다.
+
+**검사와 자동 촬영은 Clothing 미리보기 기준**입니다. 따라서 배경 점검 실패 시 원래 벽을 유지하는 촬영 fallback도 Clothing 기준이고, 과거 FBA alpha 기준 검사와 판정이 다를 수 있습니다. 최종 사진은 저장된 스냅샷이 아니라 촬영 프레임의 FBA 결과입니다. 결과가 느리거나 실패하면 상태에 표시됩니다. Main과 Clothing 단독 모드는 기존과 같습니다.
+
+참고 계측: Apple M4 Pro, 같은 shot3의 640×360 프레임·캐시 랜드마크, strength 0, 실제 로컬 FBA 가중치(타일 768, 겹침 96, Torch 4 threads). 카메라·랜드마크 검출·화면 렌더링은 제외했습니다. 변경 전 단일 처리 경로에서 8회 warm 평균은 Main 33.2 ms, Clothing 36.3 ms, FBA + Clothing 273.1 ms(3.66 fps), FBA 첫 프레임 684.5 ms였습니다. 변경 후 오프스크린 Worker에 같은 프레임을 최대 30 fps로 공급하고 첫 2초를 제외한 8초를 측정한 결과 Main 27.0 fps, Clothing 25.75 fps, FBA 선택 시 Clothing 화면 22.125 fps와 FBA 스냅샷 4.0 fps, 스냅샷 평균 경과 0.335초였습니다. 별도 추론도 CPU를 공유하므로 미리보기가 항상 부드럽다는 보장은 없습니다. 이는 실제 카메라/네이티브 화면 측정이 아니며 환경과 입력 해상도에 따라 달라집니다. 실제 네이티브 앱 창·카메라 동작은 이 환경에서 검증하지 못했습니다.
+
+### FBA + Clothing 옆 배경 누출 진단
+
+아래 네 실험의 비교 이미지는 인물이 포함되어 저장소에 올리지 않습니다. 로컬 평가 명령으로 생성할 수 있습니다.
+
+[라이브 CSV](docs/evaluation/clothing/fba-leakage/live/measurements.csv) · [전체 격자 CSV](docs/evaluation/clothing/fba-leakage/full-grid/measurements.csv)
+
+신고된 실제 카메라 프레임은 저장되지 않아, 같은 문제일 가능성을 기존 12장으로 확인했습니다. 640 px 입력, 같은 랜드마크, 사진별 새 `Matter`, strength 0과 앱 발표 모드의 FBA 타일 768·겹침 96을 사용했습니다. 라이브는 `s=2`, 전체 격자는 같은 640 px 입력의 `s=1`이며 연속 카메라의 warm state나 실제 앱 화면을 재현한 것은 아닙니다. FBA 합성은 발표 모드처럼 선형광 흰 배경을 사용하며, 이 전의 1024 타일·sRGB 합성 그림과 수치가 다를 수 있습니다.
+
+Clothing 자체의 test1 결과에는 이미 옷 옆 어두운 물체가 남습니다. 자동 트라이맵은 그 alpha를 침식한 안쪽을 확정 전경으로, 넓어진 마스크 주위를 미확정으로 만듭니다. 단계별 그림의 빨강은 Main 미확정 → Clothing 확정 전경, 파랑은 Main 확정 배경 → Clothing 미확정, 보라는 Main 확정 배경 → Clothing 확정 전경입니다. 이 변화는 **옷과 배경이 섞인 전체 영역**이므로 모두 오류라는 뜻이 아닙니다. 예를 들어 라이브 test1은 각각 24,014·9,824·0픽셀이 바뀝니다. 확정 전경으로 지정된 배경은 FBA가 제거할 수 없고, 미확정 영역에서도 test4의 Main FBA처럼 옷 주변 배경이 흐리게 남을 수 있습니다. 따라서 Clothing만의 문제나 FBA만의 문제로 단정할 수 없습니다.
+
+고정 후보 **Guarded**는 Main 트라이맵의 확정 배경을 보존하고, Main 미확정 중 Clothing 확정 전경이면서 첫 Main FBA alpha > 0.75인 곳만 확정 전경으로 승격해 FBA를 다시 실행합니다. 기준 0.75는 이전에 이 사진들을 보며 정한 값입니다. 라이브 test1에서 Clothing FBA 대비 alpha 0.5 초과가 11,701픽셀 줄어도 옷과 배경이 함께 포함되며, 옆 배경은 여전히 보입니다. shot5에서는 같은 비교의 31,706픽셀이 줄면서 실제 재킷 양쪽도 크게 사라집니다. 머리와 옷을 보존하면서 배경만 안정적으로 제거한 근거가 없어 이 후보는 발표 앱에 채택하지 않았습니다. 앞서 시도한 형태·연결·밝기 경계 후보도 아래 실패 사례를 참고하세요.
+
+CSV의 픽셀 수와 alpha 차이는 정답 오류율이 아니며, 정답 마스크 없는 12장으로 일반 정확도 우위를 주장할 수 없습니다. 사진은 로컬에서만 처리합니다. 아래 재현에는 기존 로컬 랜드마크 캐시와 FBA 자산이 필요합니다.
+
+```bash
+uv run --extra fba --group dev python -m tools.eval_fba_leakage --out out/fba-leakage/live
+uv run --extra fba --group dev python -m tools.eval_fba_leakage --full-grid --out out/fba-leakage/full-grid
+```
+
+### 색 근거로 옆 배경을 제한하는 추가 실험
+
+[라이브 CSV](docs/evaluation/clothing/fba-color-constraints/live/measurements.csv) · [전체 격자 CSV](docs/evaluation/clothing/fba-color-constraints/full-grid/measurements.csv)
+
+같은 12장과 발표 모드의 타일 설정으로 사진별 조정 없이 네 후보를 비교했습니다. 기존 Clothing 트라이맵의 확정 배경과 턱 아래 중앙 확정 전경에서 각각 최대 2,000픽셀을 표본으로 뽑아 기존 sqrt-linear 색 거리와 k-means를 사용합니다. 중앙 전경 표본은 턱 + 0.25 `ec` 아래, 중심선 ±0.65 `fw`입니다. 턱 + 0.2 `ec` 아래에서 배경 거리 < 1.0, 중앙 옷 거리 > 2.5인 픽셀을 배경 근거로 봅니다. 이는 확실한 배경 라벨이 아닙니다. 두 표본 중 하나가 50픽셀 미만이면 후보를 적용하지 않고 CSV에 표시합니다.
+
+- **Color BG trimap:** 배경 근거와 겹치는 미확정 영역을 확정 배경으로 바꾸고 FBA를 새로 실행합니다.
+- **BG + FG demotion:** 위 변경에 더해 배경 근거와 겹치는 확정 전경은 미확정으로 낮춘 후 FBA를 다시 실행합니다.
+- **Buffered BG trimap:** 첫 Clothing FBA alpha > 0.8 또는 원래 확정 전경을 얼굴 너비의 0.25배만큼 팽창해 보호합니다. 보호 영역 밖의 미확정 배경 근거만 확정 배경으로 바꿔 FBA를 다시 실행합니다.
+- **Color soft post:** 원래 FBA의 미확정 영역 중 배경 근거에 해당하는 alpha만 절반으로 낮춥니다. 전경색은 다시 추정하지 않습니다.
+
+라이브 test3·test4의 배경 안개는 보호 없는 트라이맵 후보에서 줄지만 어두운 물체 일부는 남습니다. shot5 재킷은 대체로 남지만, **shot3은 화면 왼쪽 재킷이 보호 없는 트라이맵 후보에서 더 잘립니다.** Buffered는 shot3 재킷을 더 남기지만 test3·test4의 옆 배경도 상당히 남깁니다. 후처리 후보는 test3·test4의 배경에 수평 경계가 드러납니다. test1·test2는 색 근거가 0픽셀이라 네 후보 모두 누출을 해결하지 못합니다. 머리 위의 입력 트라이맵은 바꾸지 않아도 FBA 재실행으로 머리 결과가 바뀔 수 있습니다.
+
+또한 정답이 있는 합성 재킷의 한 소매를 벽과 같은 색으로 만든 반례에서 4,249개 소매 픽셀 모두가 배경 근거로 판정되어 보호 없는 트라이맵 후보의 확정 배경이 됩니다. 기존 FBA 역시 이 합성 소매의 alpha를 이미 낮게 추정하므로 이는 이번 후보가 기존 결과를 4,249픽셀만큼 추가로 손상했다는 뜻이 아니라, 색만으로는 옷 보존을 보장하지 못한다는 확인입니다. 옷 손실과 잔여물 때문에 네 후보 모두 앱에 적용하지 않았습니다. 실제 카메라 프레임은 없고 사진에 정답 마스크도 없으므로 이 결과를 실제 카메라의 재현이나 일반적인 정확도 개선으로 해석할 수 없습니다.
+
+```bash
+uv run --extra fba --group dev python -m tools.eval_fba_color_constraints --out out/fba-color-constraints/live
+uv run --extra fba --group dev python -m tools.eval_fba_color_constraints --full-grid --out out/fba-color-constraints/full-grid
+```
+
+## 사람 형태와 밝기 경계 prior: 오프라인 비교
+
+[라이브 CSV](docs/evaluation/clothing/shape-priors/live/measurements.csv) · [전체 격자 CSV](docs/evaluation/clothing/shape-priors/full-grid/measurements.csv)
+
+아래 FBA 조합과 같은 12장·640 px 입력 및 같은 캐시 랜드마크를 쓰고, 사진별 조정 없이 다음 후보를 시험했습니다. 자세나 가려짐을 추정하지 못하므로 사람 밖을 확정 배경으로 자르지 않습니다. 기존 옷 모듈의 `clothing_regions` 몸통 prior를 `(likely - 0.5) / 0.2`로 0–1에 제한한 값 `T`와 턱에서 아래로 `0.4 × 눈–턱 거리`에 걸쳐 0에서 1로 증가하는 값 `B`를 씁니다. 연결성 `C`는 **옷 트라이맵 FBA alpha > 0.5**의 8-연결 성분 중 얼굴 마스크와 겹치는 성분입니다. 연결된 배경도 포함될 수 있고, 끊어진 옷도 제외될 수 있습니다.
+
+- **Shape + connect trimap / FBA:** 옷 트라이맵의 확정 전경 중 Main 트라이맵은 미확정이고 `B ≥ 0.5`이며 `T < 0.5` 또는 얼굴 비연결인 픽셀만 미확정으로 낮춘 뒤 FBA를 새로 실행합니다. 확정 배경을 새로 지정하지 않습니다.
+- **Shape post:** 옷 트라이맵 FBA 결과에서 Main 트라이맵이 미확정인 픽셀의 alpha에 `1 - 0.2 × B × (1 - T)`를 곱합니다.
+- **Shape + connect post:** 위 감소에 `0.15 × B × (1 - C)`를 더합니다. 한 픽셀의 alpha를 최대 35%만 낮추며, Main 트라이맵의 확정 픽셀은 기존 옷 기반 FBA 값을 그대로 보존합니다. Main의 확정 배경을 새 결과에 강제로 적용하는 것은 아닙니다.
+- **Shape + connect + edge post:** 위 감소에 선형광 휘도 Sobel 경사 `g`의 `1 - clip(g / 0.04, 0, 1)`을 곱해 강한 밝기 경계에서 감쇠를 줄입니다. 전경색은 FBA 추정값을 재사용합니다.
+
+새 트라이맵은 라이브 12장 중 5장, 전체 격자 6장에서 바뀌지 않아 재실행 결과도 사실상 기존 결합과 같습니다. 라이브 test2에서는 확정 전경 424픽셀을 미확정으로 바꿨지만 주변 배경이 여전히 남습니다. 후처리는 test1·test4의 배경과 옷을 함께 옅게 만들 수 있고, test9에서는 인물과 연결된 벽·그림자가 남습니다. shot5에서는 기존 결합의 재킷은 보존되지만 후처리로 일부가 옅어집니다. 강한 휘도 경계가 옷 경계라는 보장은 없어 edge 후보도 그림자나 무늬를 보호할 수 있습니다. 유의미한 안정적 개선을 확인하지 못해 어느 후보도 앱에 채택하지 않았습니다.
+
+CSV의 추가·제거는 `FBA: clothing`과 alpha 0.5 기준을 비교한 전체 픽셀 수이며 정답 오류나 옷 복원량이 아닙니다. 예를 들어 shape + connect 후처리에서 라이브 test1은 1,216개, test4는 1,906개가 0.5 이하로 바뀌지만 옷과 배경이 섞여 있습니다. 12장에 정답 마스크가 없고 관찰이 독립 검증도 아니므로 정확도 우위를 주장할 수 없습니다. 앞선 결합과 마찬가지로 FBA는 비상업적 로컬 연구로만 실행했습니다.
+
+```bash
+uv run --extra fba --group dev python -m tools.eval_shape_priors --out out/shape-priors/live
+uv run --extra fba --group dev python -m tools.eval_shape_priors --full-grid --out out/shape-priors/full-grid
+```
+
+### 조명·깊이 관련 연구와 이번 후보의 차이
+
+- [Virtual Multi-Modality Self-Supervised Foreground Matting for Human-Object Interaction](https://arxiv.org/abs/2110.03278) (ICCV 2021)은 RGB 한 장에서 깊이·분할·상호작용 지도를 추정해 사람과 상호작용 물체를 함께 매팅합니다. 단안 깊이 추정의 실제 사례지만 사람만 남기는 증명사진 문제와 목적이 다릅니다.
+- [DART: Depth-Enhanced Accurate and Real-Time Background Matting](https://arxiv.org/abs/2402.15820) (arXiv 2024)은 **RGB-D 카메라**의 깊이와 배경 깊이 prior로 트라이맵을 정제하며 정적 배경을 전제로 합니다. RGB 한 장에서 깊이를 추정하는 방법은 아닙니다.
+- [Total Relighting: Learning to Relight Portraits for Background Replacement](https://augmentedperception.github.io/total_relighting/) (SIGGRAPH 2021)은 매팅 후 목표 조명에 맞춰 인물을 재조명해 합성합니다. 조명 정보를 매팅 prior로 쓰는 사례는 아닙니다. [Controllable Light Diffusion for Portraits](https://arxiv.org/abs/2305.04745) (CVPR 2023)는 인물의 강한 그림자·반사를 완화해 분할 같은 후속 작업에 활용하는 연구이며 매팅 입력 prior 자체는 아닙니다.
+
+이번 휘도 경사는 원본 선형 밝기의 국소 변화만 이용하며 **조명 또는 깊이를 추정하지 않습니다**. 사용 가능한 기존 실험 자산에는 깊이 모델이나 깊이 지도가 없고, 별도의 깊이 모델은 가중치·라이선스와 계산량 검토가 필요하므로 다운로드하거나 적용하지 않았습니다. 위 두 조명 논문은 조명 처리가 관련될 수 있음을 보여 주지만, 조사한 출처만으로 조명 추정을 직접 인물 매팅 prior로 쓴다고 주장하지 않습니다.
+
+## FBA와 옷 모듈 조합 비교
+
+[라이브 CSV](docs/evaluation/clothing/fba-combinations/live/measurements.csv) · [전체 격자 CSV](docs/evaluation/clothing/fba-combinations/full-grid/measurements.csv)
+
+두 모드 모두 640 px 너비 입력이며 각각 라이브 `s=2`, 촬영용 전체 격자 `s=1`입니다. 전체 격자는 원본 해상도가 아닙니다. 같은 사진별 랜드마크와 relighting strength 0을 쓰고 각 사진마다 새로운 `Matter`를 사용했습니다. 자동 트라이맵은 alpha > 0.5 마스크를 얼굴 너비의 0.06배만큼 침식한 전경과 얼굴 마스크를 확정 전경으로, 0.5배만큼 확장한 마스크 바깥을 확정 배경으로 정하되 몸통 영역은 미확정으로 둡니다.
+
+- **FBA: Main:** Main alpha에서 위 규칙으로 트라이맵을 만들어 FBA 실행.
+- **FBA: clothing:** 현재 옷 모듈 alpha에서 같은 규칙으로 트라이맵을 만들어 FBA 실행. 기존 결합의 재현입니다.
+- **FBA + post:** Main FBA 이후 Main 트라이맵 미확정이고 옷 트라이맵 확정 전경, 옷 gate ≥ 0.95, 옷 alpha ≥ 0.9, Main FBA alpha > 0.75인 픽셀만 두 alpha의 큰 값으로 올립니다. Main의 확정 배경은 유지하고 FBA 전경색은 다시 추정하지 않습니다. 이 높은 alpha와 침식 마스크는 보수적인 **대리 근거**이지 보정된 옷 확률이나 확실한 옷 라벨이 아닙니다.
+- **FBA: guarded:** 기존 Guarded FBA처럼 Main 트라이맵의 미확정 중 옷 트라이맵 확정 전경과 Main FBA alpha > 0.75가 겹치는 픽셀만 확정 전경으로 바꿔 FBA를 새로 실행합니다. Main의 확정 배경을 풀지 않습니다.
+
+새 후처리의 기준은 사진별 조정 없이 고정한 실험적 규칙이고, Guarded의 0.75는 이전에 이 사진들을 보며 정한 기준입니다. 예를 들어 shot5에서는 `FBA: clothing`이 빠진 재킷을 되찾지만, Main을 보존하는 post와 guarded는 거의 복원하지 못합니다. test1에서는 옷 트라이맵 결합이 옷과 함께 양옆 배경도 짙게 남기며, test9에서는 여러 FBA 결과에 배경과 그림자가 남습니다. shot2의 post는 재킷 alpha를 올리지만 원래 FBA 전경색을 그대로 재사용하므로 얼룩처럼 보일 수 있습니다. 합성은 FBA의 경우 추정 전경과 alpha를 sRGB에서 흰색에 합성하고 Main·Clothing은 앱의 선형광 합성을 쓰므로 색상 비교는 동일 조건이 아닙니다.
+
+**정답 마스크가 없으므로** CSV의 alpha 평균, 0.5 초과 픽셀과 FBA 대비 변화는 정확도나 옷 복원율이 아닙니다. 새 랜드마크 캐시로 검출했으므로 이전 실행의 숫자와 달라질 수 있습니다. 이 비교는 FBA 가중치를 비상업적 로컬 연구에만 사용했습니다. 모델 준비 후 아래 명령으로 재현합니다.
+
+```bash
+uv run --extra fba --group dev python -m tools.eval_fba_combinations --out out/fba-combinations/live
+uv run --extra fba --group dev python -m tools.eval_fba_combinations --full-grid --out out/fba-combinations/full-grid
+```
 
 ## 최신 실험: 12장 전체
 

@@ -44,6 +44,23 @@ def test_clothing_recovery_keeps_outer_fabric_without_filling_the_gate(kind, fas
     assert np.all(ctx.alpha[ctx.face_mask] == 1.0)
 
 
+@pytest.mark.parametrize("fast", [True, False], ids=["live", "shutter"])
+def test_disabled_clothing_matches_fixed_main_baseline(fast):
+    from tools.eval_clothing import BASELINE, baseline_module, process
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    baseline, _ = process(baseline_module(BASELINE), rgb, lm, fast)
+    ctx = make_ctx(rgb, lm)
+    from idphoto.relight import Relighter
+
+    Relighter().process(ctx, strength=0.0)
+    matting.Matter().process(ctx, np.ones(3, np.float32), update=False,
+                             fast=fast, clothing_enabled=False)
+    np.testing.assert_array_equal(ctx.alpha, baseline.alpha)
+    np.testing.assert_array_equal(ctx.output_frame, baseline.output_frame)
+    assert not ctx.stats["matting"]["clothing_applied"]
+
+
 def test_clothing_sampling_guard_excludes_out_of_gate_white_sleeves():
     rgb, lm, _, target = clothing_scene("white")
     gate, _, _, guard, _ = matting.clothing_regions(target.shape, lm)

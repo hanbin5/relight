@@ -222,7 +222,7 @@ class Matter:
         self.clothing_bg = self.clothing_fg = None
 
     def process(self, ctx: FrameContext, background=None, update: bool = True,
-                fast: bool = True) -> FrameContext:
+                fast: bool = True, clothing_enabled: bool = True) -> FrameContext:
         """Fill alpha, output_frame and wall_color. background: linear RGB (3,), or None
         to keep the original wall. fast runs steps 1-3 on a half-resolution grid (live view)."""
         lin, relit = ctx.linear_rgb, ctx.relit_frame
@@ -283,7 +283,7 @@ class Matter:
         clothing_samples, clothing_background_samples = int(clothing_seed.sum()), int(clothing_bg_seed.sum())
         clothing_applied = False
         clothing_used_samples = 0
-        if clothing_samples >= 50 and clothing_background_samples >= 50:
+        if clothing_enabled and clothing_samples >= 50 and clothing_background_samples >= 50:
             warm_clothing = update and self.clothing_bg is not None
             cbg = kmeans(_sample(col, clothing_bg_seed, n, 3), config.BG_CLUSTERS,
                          self.clothing_bg[0] if warm_clothing else None, 3 if warm_clothing else 8)
