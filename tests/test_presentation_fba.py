@@ -104,3 +104,45 @@ def test_presentation_adapter_uses_fba_alpha_and_relighting(monkeypatch):
     np.testing.assert_allclose(ctx.output_frame, .4 * color.srgb_to_linear(.5) * 1.5 + .6)
     adapter(ctx, None)
     np.testing.assert_array_equal(ctx.output_frame, ctx.relit_frame)
+
+
+@pytest.mark.parametrize("size", [1, 2, 3, 6])
+@pytest.mark.parametrize("shape", [(3, 5), (9, 13), (12, 18)])
+def test_mps_pool_workaround_matches_adaptive_pool(size, shape):
+    torch = pytest.importorskip("torch")
+    from tools.fba_reference import _exact_adaptive_pool
+
+    x = torch.rand((2, 3, *shape), generator=torch.Generator().manual_seed(7))
+    expected = torch.nn.functional.adaptive_avg_pool2d(x, size)
+    pool = _exact_adaptive_pool(size)
+    torch.testing.assert_close(pool(x), expected, atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(pool(x), expected, atol=1e-6, rtol=1e-6)
+
+
+def test_unavailable_mps_is_reported_before_loading_weights(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from tools.presentation_fba import check_availability
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    with pytest.raises(ValueError, match="MPS acceleration is unavailable"):
+        check_availability("mps")
+
+
+def test_real_mps_prediction_matches_cpu_when_available():
+    torch = pytest.importorskip("torch")
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS unavailable")
+    from tools.eval_clothing import fba_trimap
+    from tools.fba_reference import FBAReference, verify_assets
+
+    try:
+        verify_assets()
+    except FileNotFoundError:
+        pytest.skip("local FBA research weights unavailable")
+    torch.set_num_threads(4)
+    rgb, lm, _, _ = clothing_scene("jacket")
+    ctx, _ = Pipeline().process(rgb, Settings(strength=0, auto_shutter=False), landmarks=lm)
+    trimap = fba_trimap(rgb, lm, ctx)
+    cpu, _ = FBAReference(device="cpu").process(rgb, trimap)
+    mps, _ = FBAReference(device="mps").process(rgb, trimap)
+    np.testing.assert_allclose(mps, cpu, rtol=0, atol=3e-4)

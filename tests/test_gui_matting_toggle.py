@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from idphoto import matting
@@ -96,6 +97,18 @@ def test_presentation_fba_is_opt_in_and_disables_when_unavailable(monkeypatch):
     app.processEvents()
 
 
+def test_unavailable_mps_disables_fba_without_silent_cpu_fallback(monkeypatch):
+    torch = pytest.importorskip("torch")
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True, fba_device="mps")
+    window.open_timer.stop()
+    assert not window.fba_box.isEnabled()
+    assert "MPS acceleration is unavailable" in window.fba_warning.text()
+    window.close()
+    app.processEvents()
+
+
 def test_presentation_fba_requires_clothing_and_starts_off(monkeypatch):
     from tools import presentation_fba
 
@@ -113,12 +126,15 @@ def test_presentation_fba_requires_clothing_and_starts_off(monkeypatch):
     app.processEvents()
 
 
-def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch):
-    pytest.importorskip("torch")
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch, device):
+    torch = pytest.importorskip("torch")
     from tools.presentation_fba import PresentationFBA, check_availability
 
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS unavailable")
     try:
-        check_availability()
+        check_availability(device)
     except FileNotFoundError:
         pytest.skip("local FBA research weights unavailable")
     app = QApplication.instance() or QApplication([])
@@ -145,22 +161,105 @@ def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch):
         called.set()
 
     monkeypatch.setattr(PresentationFBA, "__call__", observe)
-    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True)
+    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True, fba_device=device)
     window.open_timer.stop()
     window.settings.strength = 0
     window.settings.auto_shutter = False
+    captured = []
+    monkeypatch.setattr(window, "on_captured", captured.append)
     window.open_source()
     try:
         assert window.fba_box.isEnabled()
         window.fba_box.click()
         deadline = time.monotonic() + 30
-        while not called.is_set() and window.worker.isRunning() and time.monotonic() < deadline:
+        while (not called.is_set() or not window.view.info or not window.view.info.get("fba_display")) \
+                and window.worker.isRunning() and time.monotonic() < deadline:
             time.sleep(.02)
             app.processEvents()
         assert called.is_set(), window.view.message
+        assert window.view.info["fba_display"]
+        assert window.view.image == window.fba_last["image"].flipped(Qt.Orientation.Horizontal)
+        window.take_photo()
+        deadline = time.monotonic() + 30
+        while not captured and window.worker.isRunning() and time.monotonic() < deadline:
+            time.sleep(.02)
+            app.processEvents()
+        assert captured and captured[0]["report"]["settings"]["fba_demo"]
+        assert np.isfinite(captured[0]["ctx"].alpha).all()
     finally:
         window.close()
         app.processEvents()
+
+
+def test_fba_toggle_displays_own_snapshot_in_main_view_and_clears_on_face_loss(monkeypatch):
+        from tools import presentation_fba
+
+        app = QApplication.instance() or QApplication([])
+        rgb, lm, _, _ = clothing_scene("jacket")
+        face_present = threading.Event()
+        face_present.set()
+
+        class FixedDemo(DemoSource):
+            def __init__(self):
+                self.name = "fixed demo"
+                self.lock_state = "locked"
+
+            def read(self):
+                time.sleep(.03)
+                return rgb, lm if face_present.is_set() else None
+
+        class RedFBA:
+            def __call__(self, ctx, background):
+                ctx.output_frame = np.zeros_like(ctx.output_frame)
+                ctx.output_frame[:, :, 0] = 1
+
+        import idphoto.gui as gui
+
+        monkeypatch.setattr(gui, "open_source", lambda *_: FixedDemo())
+        monkeypatch.setattr(presentation_fba, "check_availability", lambda: None)
+        monkeypatch.setattr(presentation_fba, "PresentationFBA", RedFBA)
+        window = MainWindow("demo", "ko", (640, 480), presentation_fba=True)
+        window.open_timer.stop()
+        window.settings.strength = 0
+        window.settings.auto_shutter = False
+        window.open_source()
+
+        def wait_for(predicate):
+            deadline = time.monotonic() + 15
+            while not predicate() and time.monotonic() < deadline:
+                time.sleep(.01)
+                app.processEvents()
+            assert predicate()
+
+        try:
+            wait_for(lambda: window.view.image is not None)
+            assert window.view.image.pixelColor(0, 0).getRgb()[:3] != (255, 0, 0)
+            window.fba_box.click()
+            wait_for(lambda: window.view.info.get("fba_display"))
+            assert window.view.image.pixelColor(0, 0).getRgb()[:3] == (255, 0, 0)
+            assert window.fba_image.pixmap() is not None
+            old_snapshot = window.fba_last
+
+            window.set_before(True)
+            wait_for(lambda: window.view.image.pixelColor(0, 0).getRgb()[:3] != (255, 0, 0))
+            window.set_before(False)
+            wait_for(lambda: window.view.image.pixelColor(0, 0).getRgb()[:3] == (255, 0, 0))
+
+            face_present.clear()
+            wait_for(lambda: not window.live_info["fba_eligible"])
+            assert window.fba_last is None
+            assert not window.view.info.get("fba_display")
+            window.on_fba_snapshot(old_snapshot)
+            assert window.fba_last is None
+
+            face_present.set()
+            wait_for(lambda: window.view.info.get("fba_display"))
+            window.fba_box.click()
+            wait_for(lambda: not window.view.info.get("fba_display"))
+            assert window.view.image.pixelColor(0, 0).getRgb()[:3] != (255, 0, 0)
+        finally:
+            window.close()
+            app.processEvents()
 
 
 def test_fba_wait_does_not_stop_clothing_preview_or_capture(monkeypatch):

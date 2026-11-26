@@ -120,10 +120,45 @@ def native_tiles(rgb: np.ndarray, trimap: np.ndarray, predict, tile_size: int = 
     return np.clip(output, 0.0, 1.0), count
 
 
+def _exact_adaptive_pool(size: int):
+    """MPS lacks adaptive pooling for non-divisible dimensions; use exact bin averages."""
+    import torch
+
+    class ExactPool(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cache = {}
+
+        def forward(self, x):
+            h, w = x.shape[-2:]
+            key = (h, w, x.device, x.dtype)
+            if key not in self.cache:
+                def weights(length):
+                    result = torch.zeros((size, length), dtype=x.dtype)
+                    for i in range(size):
+                        start = i * length // size
+                        end = ((i + 1) * length + size - 1) // size
+                        result[i, start:end] = 1 / (end - start)
+                    return result.to(x.device)
+
+                if len(self.cache) >= 16:
+                    self.cache.clear()
+                self.cache[key] = weights(h), weights(w).T
+            left, right = self.cache[key]
+            return torch.matmul(left, torch.matmul(x, right))
+
+    return ExactPool()
+
+
 class FBAReference:
-    def __init__(self, directory: Path = ASSETS):
+    def __init__(self, directory: Path = ASSETS, device: str = "cpu"):
         import torch
 
+        if device not in ("cpu", "mps"):
+            raise ValueError(f"Unsupported FBA device: {device}")
+        if device == "mps" and not torch.backends.mps.is_available():
+            raise ValueError("FBA MPS acceleration is unavailable on this system; select CPU.")
+        self.device = torch.device(device)
         verify_assets(directory)
         source = (directory / "source").resolve()
         sys.path.insert(0, str(source))
@@ -137,6 +172,10 @@ class FBAReference:
         state = torch.load(directory / "FBA.pth", map_location="cpu", weights_only=True)
         self.model.load_state_dict(state, strict=True)
         self.model.eval()
+        if device == "mps":
+            for block in self.model.decoder.ppm:
+                block[0] = _exact_adaptive_pool(block[0].output_size)
+            self.model.to(self.device)
 
     def predict(self, rgb: np.ndarray, trimap: np.ndarray) -> np.ndarray:
         import torch
@@ -153,7 +192,7 @@ class FBAReference:
                 features.append(np.exp(-0.5 * (distance / (fraction * 320)) ** 2))
 
         def tensor(array):
-            return torch.from_numpy(np.ascontiguousarray(array)).permute(2, 0, 1)[None]
+            return torch.from_numpy(np.ascontiguousarray(array)).permute(2, 0, 1)[None].to(self.device)
 
         image_t, known_t = tensor(image), tensor(known)
         mean = image_t.new_tensor([0.485, 0.456, 0.406])[None, :, None, None]

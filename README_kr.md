@@ -22,6 +22,8 @@ FBA 코드는 MIT이지만 공개 가중치는 [저자 안내](https://github.co
 uv sync --extra fba --group dev
 uv run --extra fba python tools/fba_reference.py --accept-noncommercial
 uv run --extra fba idphoto --presentation-fba --lang ko
+# Apple GPU 사용 시 (지원되는 Mac에서만):
+uv run --extra fba idphoto --presentation-fba --fba-device mps --lang ko
 # 카메라 대신 사진: --source docs/evaluation/test/shot5.jpg
 ```
 
@@ -29,11 +31,25 @@ uv run --extra fba idphoto --presentation-fba --lang ko
 
 선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유가 표시됩니다. 가중치 검사에 실패하면 다른 결과로 조용히 대체하지 않습니다. 영상과 사진은 외부로 보내지 않습니다.
 
-**FBA는 실시간 영상이 아닙니다.** 기존에는 카메라 획득과 Qt UI는 별도였지만 처리 Worker가 매 프레임 FBA를 기다려 미리보기 갱신이 느려졌습니다. 이제 FBA 선택 시 큰 화면은 계속 **Clothing 실시간 미리보기**이고, 옆의 별도 이미지는 해당 프레임으로 계산한 마지막 **FBA 스냅샷**과 그 프레임의 경과 시간입니다. FBA 작업은 동시에 하나만 실행하며 대기 미리보기는 최신 한 장으로 교체합니다. 이전 프레임의 alpha를 새로운 영상에 덧씌우지 않습니다. 촬영 요청은 대기 미리보기보다 우선하고 촬영 시점의 프레임과 설정으로 전체 해상도 FBA를 별도 실행하므로 시간이 더 걸릴 수 있습니다. 촬영 중 상태가 표시되며 중복 촬영은 허용하지 않습니다.
+**FBA는 실시간 영상이 아닙니다.** 기존에는 카메라 획득과 Qt UI는 별도였지만 처리 Worker가 매 프레임 FBA를 기다려 미리보기 갱신이 느려졌습니다. FBA 선택 시 큰 카메라 화면은 마지막으로 완료된 **FBA 스냅샷**과 그 프레임의 경과 시간을 보여 주며, 옆에 Clothing 실시간 미리보기가 따로 표시됩니다. 첫 스냅샷을 기다리거나 얼굴을 찾지 못할 때 큰 화면도 Clothing을 표시합니다. FBA 작업은 동시에 하나만 실행하며 대기 미리보기는 최신 한 장으로 교체합니다. 이전 프레임의 alpha를 새로운 영상에 덧씌우지 않습니다. 촬영 요청은 대기 미리보기보다 우선하고 촬영 시점의 프레임과 설정으로 전체 해상도 FBA를 별도 실행하므로 시간이 더 걸릴 수 있습니다. 촬영 중 상태가 표시되며 중복 촬영은 허용하지 않습니다.
 
 **검사와 자동 촬영은 Clothing 미리보기 기준**입니다. 따라서 배경 점검 실패 시 원래 벽을 유지하는 촬영 fallback도 Clothing 기준이고, 과거 FBA alpha 기준 검사와 판정이 다를 수 있습니다. 최종 사진은 저장된 스냅샷이 아니라 촬영 프레임의 FBA 결과입니다. 결과가 느리거나 실패하면 상태에 표시됩니다. Main과 Clothing 단독 모드는 기존과 같습니다.
 
-참고 계측: Apple M4 Pro, 같은 shot3의 640×360 프레임·캐시 랜드마크, strength 0, 실제 로컬 FBA 가중치(타일 768, 겹침 96, Torch 4 threads). 카메라·랜드마크 검출·화면 렌더링은 제외했습니다. 변경 전 단일 처리 경로에서 8회 warm 평균은 Main 33.2 ms, Clothing 36.3 ms, FBA + Clothing 273.1 ms(3.66 fps), FBA 첫 프레임 684.5 ms였습니다. 변경 후 오프스크린 Worker에 같은 프레임을 최대 30 fps로 공급하고 첫 2초를 제외한 8초를 측정한 결과 Main 27.0 fps, Clothing 25.75 fps, FBA 선택 시 Clothing 화면 22.125 fps와 FBA 스냅샷 4.0 fps, 스냅샷 평균 경과 0.335초였습니다. 별도 추론도 CPU를 공유하므로 미리보기가 항상 부드럽다는 보장은 없습니다. 이는 실제 카메라/네이티브 화면 측정이 아니며 환경과 입력 해상도에 따라 달라집니다. 실제 네이티브 앱 창·카메라 동작은 이 환경에서 검증하지 못했습니다.
+참고 계측: Apple M4 Pro, 같은 shot3의 640×360 프레임·캐시 랜드마크, strength 0, 실제 로컬 FBA 가중치(타일 768, 겹침 96, Torch 4 threads). 카메라·랜드마크 검출·화면 렌더링은 제외했습니다. 변경 전 단일 처리 경로에서 8회 warm 평균은 Main 33.2 ms, Clothing 36.3 ms, FBA + Clothing 273.1 ms(3.66 fps), FBA 첫 프레임 684.5 ms였습니다. 비동기 처리의 오프스크린 Worker에 같은 프레임을 최대 30 fps로 공급하고 첫 2초를 제외한 8초를 측정한 결과 Main 27.0 fps, Clothing 25.75 fps, FBA 선택 시 Clothing 처리 22.125 fps와 FBA 스냅샷 4.0 fps, 스냅샷 평균 경과 0.335초였습니다. 별도 추론도 CPU를 공유하므로 미리보기가 항상 부드럽다는 보장은 없습니다. 이는 실제 카메라/네이티브 화면 측정이 아니며 환경과 입력 해상도에 따라 달라집니다. 실제 네이티브 앱 창·카메라 동작은 이 환경에서 검증하지 못했습니다.
+
+#### Apple GPU 가속 실험
+
+`--fba-device mps`는 FBA 발표 모드에서만 Apple GPU를 선택합니다. 기본은 CPU이며, MPS를 사용할 수 없으면 FBA 선택을 비활성화하고 이유를 표시합니다. 가속은 입력 해상도, 트라이맵, 전체 해상도 촬영 및 모델 가중치를 바꾸지 않습니다. MPS가 일부 크기의 adaptive average pooling을 지원하지 않아 같은 구간 평균을 행렬 연산으로 계산합니다. 모델과 사진은 로컬에 남고 가중치는 배포하지 않습니다.
+
+같은 M4 Pro와 shot3 프레임의 30 fps 고정 입력, 최초 3초 제외 9초 오프스크린 Worker 계측에서 **CPU FBA 3.33 fps / 평균 프레임 경과 388 ms**, **MPS FBA 9.00 fps / 197 ms**였습니다. Clothing 처리는 각각 19.78 / 21.44 fps였으나 큰 FBA 화면은 해당 속도로 갱신되지 않습니다. MPS도 24 fps에 도달하지 않았고 실제 카메라·검출·화면 렌더링은 포함하지 않습니다.
+
+같은 12장·640 px 입력의 CPU와 MPS 출력을 비교하면 alpha 차이는 최대 0.00002769였고 alpha 0.5 기준 분류가 바뀐 픽셀은 전체에서 1개였습니다. [사진별 CSV](docs/evaluation/clothing/fba-performance/cpu-mps.csv)는 정답 정확도가 아닌 두 구현 간 차이입니다. 모델 입력을 320 px로 줄인 후보는 shot3 오프스크린에서 약 20.7 fps였지만 여전히 24 fps 미만이었고, test9에서 기존 결과 대비 alpha > 0.5 픽셀 23,804개가 낮아지는 등 차이가 커 채택하지 않았습니다. 이 픽셀에는 옷과 배경이 모두 포함될 수 있습니다.
+
+동일 자산과 캐시 랜드마크, MPS가 있는 환경에서 수치 비교와 Worker 계측을 재현합니다. 입력 사진이나 합성 이미지는 출력하지 않습니다.
+
+```bash
+uv run --extra fba --group dev python -m tools.eval_fba_performance --out out/fba-performance/cpu-mps.csv
+```
 
 ### FBA + Clothing 옆 배경 누출 진단
 

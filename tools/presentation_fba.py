@@ -9,18 +9,23 @@ from tools.eval_clothing import fba_trimap
 from tools.fba_reference import FBAReference, verify_assets
 
 
-def check_availability():
+def check_availability(device="cpu"):
     if importlib.util.find_spec("torch") is None:
         raise ImportError("FBA requires the optional extra: uv sync --extra fba --group dev")
+    if device == "mps":
+        import torch
+
+        if not torch.backends.mps.is_available():
+            raise ValueError("FBA MPS acceleration is unavailable on this system; select CPU.")
     verify_assets()
 
 
 class PresentationFBA:
-    def __init__(self):
+    def __init__(self, device="cpu"):
         import torch
 
         torch.set_num_threads(4)
-        self.model = FBAReference()
+        self.model = FBAReference(device=device)
 
     def __call__(self, ctx, background):
         if ctx.landmarks is None or ctx.face_mask is None or not ctx.face_mask.any():
