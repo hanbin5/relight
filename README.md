@@ -1,5 +1,7 @@
 # ID Photo: webcam ID photos with live relighting
 
+For the optional noncommercial FBA and clothing experiments, see [the Korean report](README_kr.md) and [the English experiment report](CLOTHING_EXPERIMENTS.md).
+
 A Python desktop app that turns a webcam session into résumé (3 × 4 cm), student or employee ID (3.5 × 4.5 cm) and square profile photos, plus 6 × 4 in print sheets. Every frame is relit to an even light from the face mesh, the background is replaced, and seven checks run before the shutter. The plan, formulas and thresholds are in [docs/id-photo-survey-plan-v2.md](docs/id-photo-survey-plan-v2.md).
 
 The photos are edited (relit, background replaced), so the app is **not for passports or other government IDs**. It says so on screen and in every saved file.

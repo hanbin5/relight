@@ -13,8 +13,11 @@ Keys: hold B to see the frame before processing, Space to take a photo now.
 """
 
 import argparse
+import copy
+import functools
 import math
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -23,6 +26,7 @@ import numpy as np
 
 from . import color, config, geometry
 from .capture import DemoSource, FrameGrabber, LockMonitor, camera_permission, is_camera, open_source
+from .fba_jobs import FbaJobs
 from .i18n import t
 from .pipeline import BACKGROUNDS, Pipeline, Settings, to_live
 
@@ -54,16 +58,20 @@ class Worker(QThread):
     frame_ready = Signal(object)
     captured = Signal(object)
     failed = Signal(str)
+    fba_snapshot = Signal(object)
+    fba_failed = Signal(object)
 
-    def __init__(self, source, settings: Settings):
+    def __init__(self, source, settings: Settings, fba_factory=None):
         super().__init__()
         self.source = source  # opened on the main thread (see MainWindow.open_source)
         self.settings = settings
+        self.fba_factory = fba_factory
         self.running = True
         self.view_before = False
         self.mirror = True
         self.shutter_request = False
         self.rearm_request = False
+        self.fba_generation = 0
 
     def run(self):
         source = self.source
@@ -79,7 +87,21 @@ class Worker(QThread):
             return
         grabber = FrameGrabber(source)
         grabber.start()
-        pipeline = Pipeline(detector)
+        pipeline = Pipeline(detector, fba_factory=self.fba_factory)
+        jobs = None
+        if self.fba_factory is not None:
+            def preview(ctx, settings, generation):
+                snapshot = copy.copy(ctx)
+                pipeline._apply_fba(snapshot, settings, settings.background_linear())
+                return {"image": to_qimage(color.encode_u8(snapshot.output_frame)),
+                        "timestamp_ms": ctx.timestamp_ms, "generation": generation,
+                        "background": settings.background, "strength": settings.strength,
+                        "geometry": ctx.geometry}
+
+            jobs = FbaJobs(preview, pipeline.render_final, self.fba_snapshot.emit,
+                           self.captured.emit,
+                           lambda capture, args, error: self.fba_failed.emit(
+                               (capture, None if capture else args[2], error)))
         monitor = LockMonitor()
         seq, fps, last = 0, 0.0, time.perf_counter()
         while self.running:
@@ -95,7 +117,21 @@ class Worker(QThread):
             if self.rearm_request:
                 pipeline.shutter.rearm()
                 self.rearm_request = False
-            ctx, fired = pipeline.process(live, self.settings, landmarks=lm_live, timestamp_ms=ts, full_frame=frame)
+            settings = copy.copy(self.settings)
+            settings.head_share = self.settings.head_share.copy()
+            generation = self.fba_generation
+            try:
+                ctx, fired = pipeline.process(live, settings, landmarks=lm_live, timestamp_ms=ts,
+                                              full_frame=frame, defer_fba=settings.fba_demo and jobs is not None)
+            except Exception as exc:
+                self.failed.emit(f"processing failed: {exc}")
+                break
+            fba_eligible = bool(ctx.landmarks is not None and ctx.face_mask is not None and ctx.face_mask.any())
+            if jobs is not None:
+                if settings.fba_demo and fba_eligible:
+                    jobs.submit_preview(ctx, settings, generation)
+                else:
+                    jobs.clear_preview()
 
             lock = getattr(source, "lock_state", "locked")
             if lock in ("locked", "partial") and ctx.face_mask is not None and ctx.face_mask.any():
@@ -108,10 +144,14 @@ class Worker(QThread):
             if (fired or self.shutter_request) and ctx.landmarks is not None and ctx.light_coeffs is not None:
                 self.shutter_request = False
                 pipeline.shutter.armed = False
-                try:
-                    self.captured.emit(pipeline.render_final(frame, ctx, self.settings))
-                except Exception as exc:  # keep the live view running
-                    self.failed.emit(f"capture failed: {exc}")
+                if settings.fba_demo and jobs is not None:
+                    if not jobs.submit_capture(frame, ctx, settings):
+                        self.fba_failed.emit((True, None, "FBA capture is already in progress"))
+                else:
+                    try:
+                        self.captured.emit(pipeline.render_final(frame, ctx, settings))
+                    except Exception as exc:  # keep the live view running
+                        self.failed.emit(f"capture failed: {exc}")
             self.shutter_request = False
 
             now = time.perf_counter()
@@ -131,9 +171,14 @@ class Worker(QThread):
                 "lock": lock,
                 "stats": {k: ctx.stats.get(k) for k in ("r_lr_before", "r_lr_after")},
                 "face": ctx.landmarks is not None,
+                "fba_eligible": fba_eligible,
+                "timestamp_ms": ctx.timestamp_ms,
                 "source": getattr(source, "name", ""),
+                "fba_capture_busy": bool(jobs and jobs.capture_busy),
             })
         grabber.stop()
+        if jobs is not None:
+            jobs.stop()
         if detector is not None:
             detector.close()
 
@@ -182,7 +227,16 @@ class LiveView(QWidget):
             self._draw_guide(p, geo, to_view)
         if not self.info.get("face"):
             self._banner(p, t("no_face", self.lang) + " · " + t("msg_no_face", self.lang))
-        self._pill(p, QPointF(18, 16), t("pill_before" if self.before else "pill_relit", self.lang), dark=not self.before)
+        if self.before:
+            label = t("pill_before", self.lang)
+        elif self.info.get("fba_display"):
+            age = max(0.0, time.monotonic() - self.info["fba_timestamp_ms"] / 1000)
+            label = t("pill_fba", self.lang, age=age)
+        elif self.info.get("fba_waiting"):
+            label = t("pill_clothing", self.lang)
+        else:
+            label = t("pill_relit", self.lang)
+        self._pill(p, QPointF(18, 16), label, dark=not self.before)
         self._pill(p, QPointF(self.width() - 18, 16), t("hold_b", self.lang), dark=False, right=True)
         if self.message:
             self._banner(p, self.message, bottom=True)
@@ -332,11 +386,34 @@ class KeyFilter(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, source, lang: str, camera_size):
+    def __init__(self, source, lang: str, camera_size, presentation_fba=False, fba_device="cpu"):
         super().__init__()
         self.lang = lang
         self.settings = Settings()
+        self.fba_factory = None
+        self.fba_error = None
+        self.presentation_fba = presentation_fba
+        self.fba_generation = 0
+        self.fba_last = None
+        self.fba_valid_after_ms = -1
+        self.live_info = None
+        self.fba_runtime_error = None
+        self.fba_preview_failed = False
+        self.worker = None
+        if presentation_fba:
+            try:
+                from tools.presentation_fba import PresentationFBA, check_availability
+
+                if fba_device == "cpu":
+                    check_availability()
+                    self.fba_factory = PresentationFBA
+                else:
+                    check_availability(fba_device)
+                    self.fba_factory = functools.partial(PresentationFBA, device=fba_device)
+            except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
+                self.fba_error = str(exc)
         self.dialog = None
+        self.closing = False
         self.view = LiveView()
         self.view.lang = lang
         self._build_panel()
@@ -350,7 +427,6 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self.source_spec, self.camera_size = source, camera_size
-        self.worker = None
         self.open_attempts = 0
         self.open_timer = QTimer(self)
         self.open_timer.setSingleShot(True)
@@ -383,11 +459,14 @@ class MainWindow(QMainWindow):
                 return self._wait_for_camera()  # permission state unreadable: retry a few times
             return self.on_failed(str(exc))
         self.view.message = None
-        self.worker = Worker(source, self.settings)
+        self.worker = Worker(source, self.settings, self.fba_factory)
+        self.worker.fba_generation = self.fba_generation
         self.worker.mirror = self.view.mirror
         self.worker.frame_ready.connect(self.on_frame)
         self.worker.captured.connect(self.on_captured)
         self.worker.failed.connect(self.on_failed)
+        self.worker.fba_snapshot.connect(self.on_fba_snapshot)
+        self.worker.fba_failed.connect(self.on_fba_failed)
         self.worker.start()
 
     def _wait_for_camera(self):
@@ -472,11 +551,35 @@ class MainWindow(QMainWindow):
         self.bg_buttons["white"].setChecked(True)
         v.addLayout(sw)
 
+        self.model_label = self._section(v)
+        self.clothing_box = QCheckBox()
+        self.clothing_box.setChecked(self.settings.clothing_enabled)
+        self.clothing_box.toggled.connect(self.set_clothing)
+        v.addWidget(self.clothing_box)
+        self.fba_box = None
+        if self.presentation_fba:
+            self.fba_box = QCheckBox()
+            self.fba_box.setEnabled(self.fba_factory is not None)
+            self.fba_box.toggled.connect(self.set_fba)
+            v.addWidget(self.fba_box)
+            self.fba_status = QLabel()
+            self.fba_status.setWordWrap(True)
+            v.addWidget(self.fba_status)
+            self.fba_preview_label = QLabel()
+            v.addWidget(self.fba_preview_label)
+            self.fba_image = QLabel()
+            self.fba_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v.addWidget(self.fba_image)
+            if self.fba_error:
+                self.fba_warning = QLabel(self.fba_error)
+                self.fba_warning.setWordWrap(True)
+                v.addWidget(self.fba_warning)
+
         self.strength_label = self._section(v)
         self.strength_slider = QSlider(Qt.Orientation.Horizontal)
         self.strength_slider.setRange(0, 100)
         self.strength_slider.setValue(int(round(self.settings.strength * 100)))
-        self.strength_slider.valueChanged.connect(lambda val: setattr(self.settings, "strength", val / 100))
+        self.strength_slider.valueChanged.connect(self.set_strength)
         self.strength_value = QLabel()
         ss = QHBoxLayout()
         ss.addWidget(self.strength_slider, 1)
@@ -553,34 +656,108 @@ class MainWindow(QMainWindow):
         self.head_slider.setValue(int(round(self.settings.head_share[key] * 100)))
         self.head_slider.blockSignals(False)
         self._update_head_label()
+        self.update_view()
 
     def set_head_share(self, value: int):
         self.settings.head_share[self.settings.format] = value / 100
         self._update_head_label()
+        self.update_view()
 
     def _update_head_label(self):
         pct = int(round(self.settings.head_share[self.settings.format] * 100))
         self.head_value.setText(f"{pct}%")
 
     def set_background(self, key: str):
+        if self.settings.background != key:
+            self.clear_fba_snapshot()
         self.settings.background = key
         self.bg_name.setText(t(f"bg_{key}", self.lang))
+
+    def set_strength(self, value: int):
+        if self.settings.strength != value / 100:
+            self.clear_fba_snapshot()
+        self.settings.strength = value / 100
+
+    def clear_fba_snapshot(self):
+        self.fba_last = None
+        self.update_fba_status()
+        self.update_view()
 
     def set_auto(self, on: bool):
         self.settings.auto_shutter = on
         if on and self.worker:
             self.worker.rearm_request = True
 
+    def set_clothing(self, on: bool):
+        if not on and self.fba_box is not None:
+            self.fba_box.setChecked(False)
+        self.settings.clothing_enabled = on
+        if self.fba_box is not None:
+            self.fba_box.setEnabled(on and self.fba_factory is not None and not self.fba_preview_failed)
+
+    def set_fba(self, on: bool):
+        self.settings.fba_demo = on
+        self.fba_generation += 1
+        self.fba_last = None
+        self.fba_runtime_error = None
+        if self.worker:
+            self.worker.fba_generation = self.fba_generation
+        self.fba_image.clear()
+        self.fba_preview_label.setVisible(on)
+        self.fba_image.setVisible(on)
+        self.update_fba_status()
+        self.update_view()
+
+    def update_fba_status(self, busy=False):
+        if self.fba_box is None:
+            return
+        if self.fba_runtime_error:
+            self.fba_status.setText(t("fba_error", self.lang, err=self.fba_runtime_error))
+        elif not self.settings.fba_demo:
+            self.fba_status.setText("")
+        elif busy:
+            self.fba_status.setText(t("fba_capturing", self.lang))
+        elif self.fba_last is None:
+            self.fba_status.setText(t("fba_waiting", self.lang))
+        else:
+            age = max(0.0, time.monotonic() - self.fba_last["timestamp_ms"] / 1000)
+            self.fba_status.setText(t("fba_snapshot_age", self.lang, age=age))
+
+    def on_fba_snapshot(self, snapshot):
+        if (not self.settings.fba_demo or snapshot["generation"] != self.fba_generation
+                or snapshot["background"] != self.settings.background
+                or snapshot["strength"] != self.settings.strength
+                or snapshot["timestamp_ms"] <= self.fba_valid_after_ms):
+            return
+        self.fba_last = snapshot
+        self.update_view()
+        self.update_fba_status()
+
+    def on_fba_failed(self, error):
+        capture, generation, message = error
+        if not capture and (not self.settings.fba_demo or generation != self.fba_generation):
+            return
+        self.fba_runtime_error = ("capture: " if capture else "preview: ") + message
+        if not capture and self.fba_box is not None:
+            self.fba_preview_failed = True
+            self.fba_box.setChecked(False)
+            self.fba_box.setEnabled(False)
+            self.fba_runtime_error = "preview: " + message
+        elif capture and self.worker:
+            self.worker.rearm_request = True
+        self.update_fba_status()
+
     def set_mirror(self, on: bool):
         if self.worker:
             self.worker.mirror = on
         self.view.mirror = on
+        self.update_view()
 
     def set_before(self, on: bool):
         if self.worker:
             self.worker.view_before = on
         self.view.before = on
-        self.view.update()
+        self.update_view()
 
     def take_photo(self):
         if self.dialog is None and self.worker:
@@ -604,6 +781,16 @@ class MainWindow(QMainWindow):
         self.bg_name.setText(t(f"bg_{self.settings.background}", L))
         for key, b in self.bg_buttons.items():
             b.setToolTip(t(f"bg_{key}", L))
+        self.model_label.setText(t("matting_model", L))
+        self.clothing_box.setText(t("clothing_toggle", L))
+        self.clothing_box.setToolTip(t("clothing_toggle_tip", L))
+        if self.fba_box is not None:
+            self.fba_box.setText(t("fba_demo", L))
+            self.fba_box.setToolTip(self.fba_error or t("fba_demo_tip", L))
+            self.fba_preview_label.setText(t("fba_clothing_preview", L))
+            self.fba_preview_label.setVisible(self.settings.fba_demo)
+            self.fba_image.setVisible(self.settings.fba_demo)
+            self.update_fba_status()
         self.strength_label.setText(t("strength", L))
         self.checks_label.setText(t("checks", L))
         self.shutter_label.setText(t("auto_shutter", L))
@@ -615,15 +802,49 @@ class MainWindow(QMainWindow):
         self.view.update()
 
     # -- frames --------------------------------------------------------------------------
-    def on_frame(self, info: dict):
-        L = self.lang
+    def update_view(self):
+        if self.live_info is None:
+            self.view.update()
+            return
+        info = dict(self.live_info)
         info["format"] = self.settings.format
         info["head_pct"] = int(round(self.settings.head_share[self.settings.format] * 100))
+        snapshot = self.fba_last if self.settings.fba_demo and not self.view.before else None
+        if snapshot is not None:
+            image = snapshot["image"]
+            info["image"] = image.flipped(Qt.Orientation.Horizontal) if self.view.mirror else image
+            geo = dict(snapshot["geometry"])
+            geo["crop_box"] = geometry.crop_box(
+                geo, geometry.FORMATS[self.settings.format], self.settings.head_share[self.settings.format])
+            geo["crop_fits"] = geometry.crop_fits(geo["crop_box"], (image.width(), image.height()))
+            info["geometry"] = geo
+            info["face"] = True
+            info["fba_display"] = True
+            info["fba_timestamp_ms"] = snapshot["timestamp_ms"]
+        elif self.settings.fba_demo and not self.view.before:
+            info["fba_waiting"] = True
         self.view.message = None
         geo = info.get("geometry")
         if geo is not None and not geo.get("crop_fits", True):
-            self.view.message = t("msg_move_back", L)
+            self.view.message = t("msg_move_back", self.lang)
         self.view.set_frame(info)
+
+    def on_frame(self, info: dict):
+        L = self.lang
+        self.live_info = info
+        if self.settings.fba_demo and not info["fba_eligible"]:
+            self.fba_valid_after_ms = max(self.fba_valid_after_ms, info["timestamp_ms"])
+            self.fba_last = None
+        if self.fba_last is not None and (self.fba_last["background"] != self.settings.background
+                                         or self.fba_last["strength"] != self.settings.strength):
+            self.clear_fba_snapshot()
+        if self.settings.fba_demo:
+            if self.view.before:
+                self.fba_image.clear()
+            else:
+                self.fba_image.setPixmap(QPixmap.fromImage(info["image"]).scaled(
+                    220, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.update_view()
         self.strength_value.setText(f"{self.strength_slider.value()}%")
 
         verdicts = info["verdicts"] or {}
@@ -657,7 +878,9 @@ class MainWindow(QMainWindow):
         rlr = ""
         if st.get("r_lr_before") is not None and math.isfinite(st["r_lr_before"]):
             rlr = f" · R_LR {st['r_lr_before']:.2f} → {st['r_lr_after']:.2f}"
-        self.status.setText(f"{info['source']} · {info['fps']:.0f} fps{rlr}\n{t(lock_key, L)}")
+        rate_label = "Clothing " if self.settings.fba_demo else ""
+        self.status.setText(f"{info['source']} · {rate_label}{info['fps']:.0f} fps{rlr}\n{t(lock_key, L)}")
+        self.update_fba_status(info.get("fba_capture_busy", False))
 
     def on_captured(self, result: dict):
         self.view.flash = 1.0
@@ -684,7 +907,13 @@ class MainWindow(QMainWindow):
         self.open_timer.stop()
         if self.worker:
             self.worker.running = False
-            self.worker.wait(3000)
+            if not self.worker.wait(3000):
+                if not self.closing:
+                    self.closing = True
+                    self.worker.finished.connect(self.close)
+                self._show_message(t("finishing_processing", self.lang))
+                event.ignore()
+                return
         super().closeEvent(event)
 
 
@@ -715,14 +944,21 @@ def main(argv=None):
     parser.add_argument("--lang", choices=["ko", "en"], default=None, help="interface language")
     parser.add_argument("--camera-size", default=f"{config.CAMERA_SIZE[0]}x{config.CAMERA_SIZE[1]}",
                         help="requested camera resolution, e.g. 1920x1080")
+    parser.add_argument("--presentation-fba", action="store_true",
+                        help="enable optional local noncommercial FBA presentation demo")
+    parser.add_argument("--fba-device", choices=("cpu", "mps"), default="cpu",
+                        help="FBA presentation inference device (default: cpu; mps: Apple GPU)")
     parser.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)  # save a window screenshot and quit
     parser.add_argument("--snapshot-after", type=float, default=6.0, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.fba_device != "cpu" and not args.presentation_fba:
+        parser.error("--fba-device mps requires --presentation-fba")
 
     app = QApplication(sys.argv[:1])
     lang = args.lang or ("ko" if QApplication.instance() and _system_is_korean() else "en")
     size = tuple(int(x) for x in args.camera_size.lower().split("x"))
-    window = MainWindow(args.source, lang, size)
+    window = MainWindow(args.source, lang, size, presentation_fba=args.presentation_fba,
+                        fba_device=args.fba_device)
     keys = KeyFilter(window)
     app.installEventFilter(keys)
     window.show()

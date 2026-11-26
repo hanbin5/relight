@@ -96,6 +96,37 @@ def test_failed_cutout_keeps_the_original_wall():
     assert pipeline.render_final(rgb, ctx, settings)["kept_wall"]
 
 
+def test_matting_toggle_resets_warm_state_and_is_used_for_capture(monkeypatch):
+    from idphoto.matting import Matter
+
+    calls = []
+    resets = []
+    original_process, original_reset = Matter.process, Matter.reset
+
+    def process(self, *args, **kwargs):
+        calls.append(kwargs.get("clothing_enabled"))
+        return original_process(self, *args, **kwargs)
+
+    def reset(self):
+        resets.append(self)
+        return original_reset(self)
+
+    monkeypatch.setattr(Matter, "process", process)
+    monkeypatch.setattr(Matter, "reset", reset)
+    rgb, lm, _ = synthetic.render(synthetic.Scene(width=640, height=480, **SIDE))
+    pipeline, settings = Pipeline(), Settings(auto_shutter=False)
+    ctx, _ = pipeline.process(rgb, settings, landmarks=lm)
+    assert settings.clothing_enabled and calls[-1] is True
+    settings.clothing_enabled = False
+    pipeline.shutter.count = 4
+    ctx, _ = pipeline.process(rgb, settings, landmarks=lm)
+    assert calls[-1] is False and len(resets) == 2
+    assert pipeline.shutter.count <= 1
+    result = pipeline.render_final(rgb, ctx, settings)
+    assert calls[-1] is False
+    assert result["report"]["settings"]["clothing_enabled"] is False
+
+
 @needs_model
 def test_mediapipe_finds_the_synthetic_face_where_the_renderer_put_it():
     from idphoto.landmarks import FaceLandmarkDetector

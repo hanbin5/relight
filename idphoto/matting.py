@@ -11,7 +11,9 @@ door, shelves, clothes, a ceiling light), so both sides get a small color model 
    weighed against its distance to the nearest foreground color, then gated by the
    head-and-shoulders prior; module A's face mask is sure foreground.
 3. Otsu's threshold on the score, opening and closing. Only the part connected to the face
-   is kept, and holes inside it are filled.
+   is kept, and holes inside it are filled. Before cleanup, a separate clothing model
+   recovers color-supported shoulders using a wider background-sampling exclusion.
+   It does not retrain the head models or remove existing foreground.
 4. Guided-filter edge refinement, with the frame's color as the guide.
 5. Spill removal with the background color around each edge pixel, and compositing:
    F = (I_relit - (1 - alpha) B_local) / max(alpha, 0.1),  I_out = alpha F + (1 - alpha) B_new.
@@ -97,6 +99,44 @@ def foreground_seeds(shape, lm: np.ndarray, face: np.ndarray) -> np.ndarray:
     return npimg.erode(face, 1) | head_core | below_chin | chest
 
 
+def clothing_regions(shape, lm: np.ndarray):
+    """Clothing gate, probability prior, inner samples, guard, and cropped-chest flag.
+
+    The guard is deliberately wider than the gate: an uncertain sleeve is neither a
+    sure wall sample nor automatically foreground. Samples widen below the neck to
+    include an outer jacket without collecting the wall above the shoulder. If the
+    chest is cropped, sample the visible sides and allow higher shoulders instead.
+    """
+    f = face_measures(lm)
+    fw, ec, cx, chin_y = f["fw"], f["ec"], f["cx"], f["chin"][1]
+    yy, xx = _grid(shape)
+    dx = np.abs(xx - cx)
+    drop = np.sqrt(np.clip((yy - chin_y - 0.2 * ec) / (0.8 * ec), 0.0, 1.0))
+    half = (0.6 + 2.2 * drop) * fw
+    gate = np.clip(1.0 + (half - dx) / (0.25 * fw), 0.0, 1.0)
+    gate = gate * (yy > chin_y + 0.2 * ec)
+    sample_drop = np.sqrt(np.clip((yy - chin_y - 0.65 * ec) / ec, 0.0, 1.0))
+    samples = ((yy > chin_y + 0.65 * ec) & (yy < chin_y + 2.5 * ec)
+               & (dx < (0.35 + 0.65 * sample_drop) * fw))
+    guard = (yy > chin_y) & (dx < half + 0.6 * fw)
+    torso = np.clip(0.5 + ((0.45 + 1.75 * drop) * fw - dx) / (0.4 * fw), 0.0, 1.0)
+    torso = torso * np.clip(0.5 + (yy - chin_y - 0.2 * ec) / (0.4 * ec), 0.0, 1.0)
+    likely = 0.5 + (config.PRIOR_TORSO - 0.5) * torso
+    cropped = bool(samples.sum() < 50 and shape[0] - chin_y > 0.3 * ec)
+    if cropped:
+        start = chin_y - 0.45 * ec
+        upper_drop = np.sqrt(np.clip((yy - start) / ec, 0.0, 1.0))
+        upper_half = (0.6 + 2.2 * upper_drop) * fw
+        side_gate = np.clip(1.0 + (upper_half - dx) / (0.25 * fw), 0.0, 1.0)
+        side_gate *= (yy > start) & (dx > 0.45 * fw)
+        gate = np.maximum(gate, side_gate)
+        likely = np.maximum(likely, 0.5 + 0.12 * side_gate)
+        sample_top = max(chin_y + 0.25 * ec, chin_y + 0.75 * (shape[0] - chin_y))
+        samples = ((yy > sample_top) & (dx > 0.4 * fw) & (dx < 0.85 * fw))
+        guard |= (yy > start) & (dx < upper_half + 0.6 * fw)
+    return gate.astype(np.float32), likely.astype(np.float32), samples, guard, cropped
+
+
 def kmeans(x: np.ndarray, k: int, init=None, iterations: int = 6, seed: int = 0):
     """Cluster colors x (N, 3). Returns centers (k, 3), each cluster's RMS spread (k,) and
     its share of the samples (k,)."""
@@ -174,12 +214,15 @@ class Matter:
     def __init__(self):
         self.bg = None
         self.fg = None
+        self.clothing_bg = None
+        self.clothing_fg = None
 
     def reset(self):
         self.bg = self.fg = None
+        self.clothing_bg = self.clothing_fg = None
 
     def process(self, ctx: FrameContext, background=None, update: bool = True,
-                fast: bool = True) -> FrameContext:
+                fast: bool = True, clothing_enabled: bool = True) -> FrameContext:
         """Fill alpha, output_frame and wall_color. background: linear RGB (3,), or None
         to keep the original wall. fast runs steps 1-3 on a half-resolution grid (live view)."""
         lin, relit = ctx.linear_rgb, ctx.relit_frame
@@ -234,6 +277,45 @@ class Matter:
         # 3. Otsu, opening and closing, the part connected to the face, holes filled.
         t = float(np.clip(npimg.otsu_threshold(score[region]), 0.35, 0.65))
         mask = score > t
+        clothing_gate, clothing_likely, clothing_seed, clothing_guard, clothing_cropped = clothing_regions(
+            (hs, ws), lm_s)
+        clothing_bg_seed = bg_seed & ~clothing_guard
+        clothing_samples, clothing_background_samples = int(clothing_seed.sum()), int(clothing_bg_seed.sum())
+        clothing_applied = False
+        clothing_used_samples = 0
+        if clothing_enabled and clothing_samples >= 50 and clothing_background_samples >= 50:
+            warm_clothing = update and self.clothing_bg is not None
+            cbg = kmeans(_sample(col, clothing_bg_seed, n, 3), config.BG_CLUSTERS,
+                         self.clothing_bg[0] if warm_clothing else None, 3 if warm_clothing else 8)
+            clothing_values = _sample(col, clothing_seed, n, 4)
+            if clothing_cropped:
+                # The close-up sample bands can include wall when shoulders are narrow.
+                distance = nearest_distance(clothing_values, *cbg[:2], bg_scale)
+                clothing_values = clothing_values[distance > config.CLOTHING_CROP_MIN_BG_DISTANCE]
+            clothing_used_samples = len(clothing_values)
+            clothing_applied = clothing_used_samples >= 50
+        if clothing_applied:
+            cfg = kmeans(clothing_values, config.FG_CLUSTERS,
+                         self.clothing_fg[0] if warm_clothing else None, 3 if warm_clothing else 8)
+            if update:
+                self.clothing_bg, self.clothing_fg = cbg, cfg
+            f = face_measures(lm_s)
+            yy, xx = _grid((hs, ws))
+            clothing_region = ((clothing_gate > 0.05)
+                               & ((yy > f["chin"][1] + 0.65 * f["ec"])
+                                  | (np.abs(xx - f["cx"]) > 0.45 * f["fw"])))
+            x = col[clothing_region]
+            clothing_distance = nearest_distance(x, *cfg[:2], np.sqrt(config.CLOTHING_SHADE_SCALE))
+            clothing_evidence = (
+                np.minimum(nearest_distance(x, *cbg[:2], bg_scale), cap)
+                - np.minimum(clothing_distance, cap)) / config.SCORE_TAU
+            p = clothing_likely[clothing_region]
+            log_odds = clothing_evidence + np.log(p / (1.0 - p))
+            clothing_score = clothing_gate[clothing_region] / (1.0 + np.exp(-log_odds))
+            # Unknown colors must not become clothing just because both distances cap.
+            mask[clothing_region] |= (clothing_score > t) & (clothing_distance < cap)
+        elif update:
+            self.clothing_bg = self.clothing_fg = None
         ks = k / s
         mask = npimg.opening(mask, max(1, round(config.OPEN_RADIUS * ks)))
         mask = npimg.closing(mask, max(1, round(config.CLOSE_RADIUS * ks)))
@@ -261,7 +343,12 @@ class Matter:
         wall = lin_s[bg_seed].mean(axis=0) if bg_seed.any() else lin_s.reshape(-1, 3).mean(axis=0)
         ctx.alpha, ctx.wall_color = alpha.astype(np.float32), wall.astype(np.float32)
         ctx.stats["matting"] = {"threshold": t, "wall_mu": ctx.wall_color, "plain_share": plain,
-                                "p_color": p_color, "prior": gate * likely, "coarse_mask": mask}
+                                "p_color": p_color, "prior": gate * likely, "coarse_mask": mask,
+                                "clothing_applied": clothing_applied,
+                                "clothing_samples": clothing_samples,
+                                "clothing_background_samples": clothing_background_samples,
+                                "clothing_cropped": clothing_cropped,
+                                "clothing_used_samples": clothing_used_samples}
         # 5. Spill removal and compositing.
         ctx.output_frame = relit if background is None else composite(ctx, bg_local, background)
         return ctx

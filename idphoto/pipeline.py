@@ -36,6 +36,8 @@ class Settings:
     background: str = "white"
     strength: float = config.DEFAULT_STRENGTH
     auto_shutter: bool = True
+    clothing_enabled: bool = True
+    fba_demo: bool = False
 
     def background_linear(self):
         hex_color = BACKGROUNDS.get(self.background)
@@ -43,19 +45,22 @@ class Settings:
 
 
 class Pipeline:
-    def __init__(self, detector=None):
+    def __init__(self, detector=None, fba_factory=None):
         self.detector = detector  # FaceLandmarkDetector; None when the source gives landmarks
         self.relighter = Relighter()
         self.matter = Matter()
         self.checker = Checker()
         self.tracker = geometry.GeometryTracker()
         self.shutter = AutoShutter()
+        self.matting_choice = None
+        self.fba_factory = fba_factory
+        self.fba = None
 
     def set_light_smoothing(self, frames: int):
         self.relighter.set_smoothing(frames)
 
     def process(self, raw: np.ndarray, settings: Settings, landmarks=None, timestamp_ms: int = 0,
-                full_frame: np.ndarray | None = None):
+                full_frame: np.ndarray | None = None, defer_fba: bool = False):
         """Run one live frame. full_frame is the camera frame raw was downscaled from, if any.
         Returns (ctx, shutter_fired)."""
         t = [time.perf_counter()]
@@ -73,7 +78,14 @@ class Pipeline:
 
         self.relighter.process(ctx, settings.strength)
         t.append(time.perf_counter())
-        self.matter.process(ctx, settings.background_linear())
+        choice = (settings.clothing_enabled, settings.fba_demo)
+        if self.matting_choice != choice:
+            self.matter.reset()
+            self.shutter.count = 0
+            self.matting_choice = choice
+        self.matter.process(ctx, settings.background_linear(), clothing_enabled=settings.clothing_enabled)
+        if not defer_fba:
+            self._apply_fba(ctx, settings, settings.background_linear())
         t.append(time.perf_counter())
         if ctx.landmarks is not None:
             geo = self.tracker.update(geometry.measure(ctx.landmarks, ctx.alpha))
@@ -98,8 +110,9 @@ class Pipeline:
     def render_final(self, raw_full: np.ndarray, live: FrameContext, settings: Settings) -> dict:
         """Re-render the shutter frame at full resolution and make every output.
 
-        Reuses the live frame's landmarks (scaled) and its 5-frame light average, so the
-        saved photo matches what the user saw. Returns photos, print sheets and a report.
+        Reuses the live frame's landmarks (scaled) and its 5-frame light average.
+        An FBA demo capture may differ from its Clothing-only live preview.
+        Returns photos, print sheets and a report.
         """
         scale = raw_full.shape[1] / live.raw_frame.shape[1]
         ctx = FrameContext(raw_frame=raw_full, timestamp_ms=live.timestamp_ms)
@@ -114,7 +127,8 @@ class Pipeline:
         kept_wall = background is not None and not (cutout and cutout.passed)
         if kept_wall:
             background = None
-        Matter().process(ctx, background, update=False, fast=False)
+        Matter().process(ctx, background, update=False, fast=False, clothing_enabled=settings.clothing_enabled)
+        self._apply_fba(ctx, settings, background)
         geo = geometry.measure(ctx.landmarks, ctx.alpha)
         for k in ("pitch_deg", "yaw_deg"):  # the live frame's angles
             geo[k] = (live.geometry or {}).get(k)
@@ -129,6 +143,8 @@ class Pipeline:
         report = {
             "notice": geometry.NOTICE,
             "settings": {"background": settings.background, "strength": settings.strength,
+                         "clothing_enabled": settings.clothing_enabled,
+                         "fba_demo": settings.fba_demo,
                          "head_share": dict(settings.head_share)},
             "original_wall_kept": kept_wall,
             "relighting": {k: _num(live.stats.get(k)) for k in ("r_lr_before", "r_lr_after", "shadow_before", "shadow_after")},
@@ -148,6 +164,15 @@ class Pipeline:
             "frame_size": list(ctx.size),
         }
         return {"photos": photos, "sheets": sheets, "report": report, "ctx": ctx, "kept_wall": kept_wall}
+
+    def _apply_fba(self, ctx, settings, background):
+        if not settings.fba_demo or ctx.landmarks is None or ctx.face_mask is None or not ctx.face_mask.any():
+            return
+        if self.fba_factory is None:
+            raise RuntimeError("FBA is only available in the opt-in presentation demo.")
+        if self.fba is None:
+            self.fba = self.fba_factory()
+        self.fba(ctx, background)
 
 
 def to_live(frame: np.ndarray, landmarks=None, width: int = config.LIVE_WIDTH):
