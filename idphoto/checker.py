@@ -172,12 +172,20 @@ class Checker:
             lo, hi = config.PITCH_RATIO_RANGE
             pitch_ok = lo <= ratio <= hi
             pitch_bound = f"pitch ratio {lo}–{hi}"
-        facing_ok = abs(yaw) <= config.YAW_RATIO_MAX and pitch_ok
+        yaw_deg = geo.get("yaw_deg")  # same idea for yaw: degrees when available
+        if yaw_deg is not None:
+            yaw_ok = abs(yaw_deg) <= config.YAW_DEG_MAX
+            yaw_bound = f"yaw ≤ {config.YAW_DEG_MAX:g}°"
+        else:
+            yaw_ok = abs(yaw) <= config.YAW_RATIO_MAX
+            yaw_bound = f"yaw ratio ≤ {config.YAW_RATIO_MAX}"
+        facing_ok = yaw_ok and pitch_ok
         ok = roll_ok and facing_ok
         message = None if ok else ("straighten_head" if not roll_ok else "face_camera")
         return Verdict(4, RULES[4], ok, roll,
-                       f"roll ≤ {config.ROLL_MAX_DEG}°; yaw ≤ {config.YAW_RATIO_MAX}; {pitch_bound}",
-                       message, {"roll_deg": roll, "yaw_ratio": yaw, "pitch_ratio": ratio, "pitch_deg": pitch_deg})
+                       f"roll ≤ {config.ROLL_MAX_DEG}°; {yaw_bound}; {pitch_bound}",
+                       message, {"roll_deg": roll, "yaw_ratio": yaw, "yaw_deg": yaw_deg,
+                        "pitch_ratio": ratio, "pitch_deg": pitch_deg})
 
     # Rule 5 -------------------------------------------------------------------------
     def eyes_open(self, lm: np.ndarray) -> Verdict:

@@ -63,7 +63,8 @@ SHARPNESS_WARMUP = 15  # frames before the calibration applies
 SHARPNESS_REL = 0.7  # a frame must reach 70% of the camera's sharp frames ...
 SHARPNESS_FLOOR = 8.0  # ... and never less than this (was 15: one real webcam scores 14 on a sharp photo, about 1 when blurred)
 ROLL_MAX_DEG = 2.5  # rule 4
-YAW_RATIO_MAX = 0.06  # rule 4
+YAW_DEG_MAX = 5.0  # rule 4: head yaw in degrees from MediaPipe, when available
+YAW_RATIO_MAX = 0.06  # rule 4 fallback without a detector (about 2.7 degrees on the synthetic face)
 PITCH_DEG_RANGE = (-5.0, 12.5)  # rule 4: head pitch in degrees from MediaPipe (+ = chin down), when available
 PITCH_RATIO_RANGE = (0.94, 1.17)  # rule 4 fallback without a detector, relative to the canonical face (1.0 = level); about -5 to +12.5 degrees on the synthetic face
 EAR_MIN = 0.23  # rule 5
