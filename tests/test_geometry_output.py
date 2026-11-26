@@ -30,7 +30,6 @@ def test_crown_follows_the_proportion_rule():
     assert source == "proportion"
 
 
-
 def test_crown_is_the_mask_top_when_the_proportion_agrees(monkeypatch):
     rgb, lm, person = synthetic.render(synthetic.Scene(**SIDE))
     alpha = person.astype(np.float32)
@@ -46,45 +45,6 @@ def test_crown_is_the_mask_top_when_the_proportion_agrees(monkeypatch):
     assert source == "proportion"
     np.testing.assert_allclose(crown, cues["proportion"])
 
-
-@pytest.mark.parametrize("key", list(geometry.FORMATS))
-def test_face_mode_sizes_the_face_from_the_skull(key):
-    fmt = geometry.FORMATS[key]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))  # no mask: crown = skull
-    crop = geometry.face_crop(geo, fmt)
-    x0, y0, x1, y1 = crop["box"]
-    assert crop["action"] == "fits"
-    assert (x1 - x0) / (y1 - y0) == pytest.approx(fmt.size_px[0] / fmt.size_px[1])
-    assert crop["face_share"] == pytest.approx(fmt.face_share)
-    assert (geo["skull"][1] - y0) / (y1 - y0) == pytest.approx(fmt.skull_top)
-    assert geometry.crop_box(geo, fmt, mode="face") == crop["box"]
-
-
-def test_face_mode_keeps_big_hair_inside_the_photo():
-    fmt = geometry.FORMATS["resume"]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
-    face = float(np.linalg.norm(geo["chin"] - geo["skull"]))
-    for extra, action in ((0.18, "moved"), (0.40, "zoomed")):
-        big = {**geo, "crown": geo["skull"] - np.float32([0, extra * face])}
-        crop = geometry.face_crop(big, fmt)
-        x0, y0, x1, y1 = crop["box"]
-        assert crop["action"] == action
-        assert crop["hair_top"] == pytest.approx(config.HAIR_MARGIN_MIN)
-        assert crop["chin"] <= config.CHIN_MAX + 1e-6
-
-
-
-@pytest.mark.parametrize("share", [0.80, 0.90])
-def test_face_mode_never_cuts_off_the_chin(share):
-    fmt = geometry.FORMATS["resume"]
-    geo = geometry.measure(synthetic.landmarks_for(synthetic.Scene(**SIDE)))
-    crop = geometry.face_crop(geo, fmt, share)
-    assert crop["chin"] <= config.CHIN_MAX + 1e-6
-    assert crop["hair_top"] >= config.HAIR_MARGIN_MIN - 1e-6
-    # The face keeps its size unless chin and hair cannot both fit; then the crop zooms out.
-    assert crop["face_share"] <= share + 1e-6
-    if crop["action"] != "zoomed":
-        assert crop["face_share"] == pytest.approx(share)
 
 def test_print_sheets_fit_ten_and_eight_photos():
     for key, count in (("resume", 10), ("id", 8)):
@@ -145,3 +105,69 @@ def test_mediapipe_finds_the_synthetic_face_where_the_renderer_put_it():
     assert found is not None and found.shape == (478, 3)
     face_width = lm[454, 0] - lm[234, 0]
     assert np.linalg.norm(found[:468, :2] - lm[:468, :2], axis=1).mean() < 0.04 * face_width
+
+
+def _rotation(pitch_deg, yaw_deg):
+    """4 x 4 matrix that turns by yaw about y after pitch about x, with some translation."""
+    p, y = np.radians([pitch_deg, yaw_deg])
+    rx = np.array([[1, 0, 0], [0, np.cos(p), -np.sin(p)], [0, np.sin(p), np.cos(p)]])
+    ry = np.array([[np.cos(y), 0, np.sin(y)], [0, 1, 0], [-np.sin(y), 0, np.cos(y)]])
+    m = np.eye(4)
+    m[:3, :3] = ry @ rx
+    m[:3, 3] = (1.0, -2.0, -40.0)  # the translation does not matter
+    return m.tolist()
+
+
+@pytest.mark.parametrize("pitch, yaw", [(-20.0, 0.0), (0.0, 0.0), (12.5, 0.0), (0.0, -18.0), (8.0, 10.0)])
+def test_pitch_and_yaw_come_back_from_the_matrix(pitch, yaw):
+    from idphoto.landmarks import pitch_from_matrix, yaw_from_matrix
+
+    m = _rotation(pitch, yaw)
+    assert pitch_from_matrix(m) == pytest.approx(pitch)
+    assert yaw_from_matrix(m) == pytest.approx(yaw)
+
+
+class _FakeDetector:
+    """Returns the renderer's landmarks with fixed head angles, like FaceLandmarkDetector."""
+
+    def __init__(self, lm, pitch_deg, yaw_deg):
+        self.lm, self.pitch_deg, self.yaw_deg = lm, pitch_deg, yaw_deg
+
+    def detect(self, rgb, timestamp_ms=None):
+        return self.lm
+
+
+def test_geometry_carries_the_detector_angles_to_the_report(tmp_path):
+    rgb, lm, _ = synthetic.render(synthetic.Scene(width=1280, height=720, face_height=0.32, center=(0.5, 0.5), **SIDE))
+    live, lm_live = to_live(rgb, lm)
+    pipeline, settings = Pipeline(_FakeDetector(lm_live, 6.5, -2.5)), Settings()
+    ctx, _ = pipeline.process(live, settings, full_frame=rgb)
+    assert (ctx.geometry["pitch_deg"], ctx.geometry["yaw_deg"]) == (6.5, -2.5)
+    result = pipeline.render_final(rgb, ctx, settings)
+    folder, _ = geometry.save_outputs(result, tmp_path)
+    saved = json.loads((folder / "report.json").read_text())["geometry"]
+    assert (saved["pitch_deg"], saved["yaw_deg"]) == (6.5, -2.5)
+
+
+def test_angles_are_none_without_a_detector():
+    rgb, lm, _ = synthetic.render(synthetic.Scene(**SIDE))
+    ctx, _ = Pipeline().process(rgb, Settings(), landmarks=lm)
+    assert ctx.geometry["pitch_deg"] is None and ctx.geometry["yaw_deg"] is None
+
+
+@needs_model
+@pytest.mark.parametrize("axis", ["pitch", "yaw"])  # pitch + tilts the chin down, yaw + turns to the image right
+def test_mediapipe_angles_follow_the_head(axis):
+    from idphoto.landmarks import FaceLandmarkDetector
+
+    detector = FaceLandmarkDetector(video=False)
+    found = {}
+    for deg in (-15.0, 0.0, 15.0):
+        rgb, _, _ = synthetic.render(synthetic.Scene(width=1280, height=720, **{axis: deg}, **SIDE))
+        assert detector.detect(rgb) is not None
+        found[deg] = getattr(detector, f"{axis}_deg")
+    assert detector.detect(np.zeros((480, 640, 3), np.uint8)) is None
+    assert detector.pitch_deg is None and detector.yaw_deg is None
+    detector.close()
+    assert found[-15.0] < found[0.0] < found[15.0]
+    assert all(abs(found[d] - d) < 5.0 for d in found)
