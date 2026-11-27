@@ -1,6 +1,7 @@
 """Exposure / white-balance lock and its check (module A, plan B.2), with fake cameras."""
 
 from types import SimpleNamespace
+import time
 
 import numpy as np
 import pytest
@@ -38,6 +39,34 @@ class Clock:
 
 def frame(value: float) -> np.ndarray:
     return np.full((64, 64, 3), value, np.uint8)
+
+
+def test_frame_grabber_preserves_source_read_timestamp():
+    class TimestampedSource:
+        def __init__(self):
+            self.first = True
+
+        def read(self):
+            if self.first:
+                self.first = False
+                return frame(1), None, 1234.5
+            return None, None
+
+        def release(self):
+            pass
+
+    grabber = capture.FrameGrabber(TimestampedSource())
+    grabber.start()
+    try:
+        deadline = time.monotonic() + 1
+        latest = None
+        while latest is None and time.monotonic() < deadline:
+            latest = grabber.latest()
+            time.sleep(0.001)
+        assert latest is not None
+        assert latest[3] == 1234.5
+    finally:
+        grabber.stop()
 
 
 def test_settle_waits_for_the_minimum_warmup():

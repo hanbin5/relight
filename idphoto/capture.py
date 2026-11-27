@@ -471,16 +471,21 @@ class FrameGrabber(threading.Thread):
     def run(self):
         while self.running:
             try:
-                frame, landmarks = self.source.read()
+                read_result = self.source.read()
             except Exception as exc:  # camera unplugged, file error
                 self.error = exc
                 break
+            if len(read_result) == 3:
+                frame, landmarks, read_timestamp_ms = read_result
+            else:
+                frame, landmarks = read_result
+                read_timestamp_ms = int(time.monotonic() * 1000)
             if frame is None:
                 time.sleep(0.01)
                 continue
             with self._lock:
                 self._seq += 1
-                self._latest = (self._seq, frame, landmarks, int(time.monotonic() * 1000))
+                self._latest = (self._seq, frame, landmarks, read_timestamp_ms)
 
     def latest(self, after_seq: int = 0):
         """(seq, frame, landmarks, timestamp_ms) newer than after_seq, or None."""
