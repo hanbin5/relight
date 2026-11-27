@@ -21,15 +21,17 @@ FIT_SIZE = 128  # light is fitted on a FIT_SIZE x FIT_SIZE face crop
 SMOOTH_FRAMES = 5  # fitted light is averaged over the last 5 frames
 SMOOTH_FRAMES_FALLBACK = 10  # C.4 fallback when the exposure lock is not available
 KEEP_FIT_FRAMES = 15  # keep the last good fit this long when the face is lost
-RATIO_CLIP = (0.5, 2.0)  # bounds of target / fitted shading, applied softly (tanh in log):
-# the plan's hard clip left flat patches where the nose's cast shadow hit the bound
+RATIO_CLIP = (0.5, 2.0)  # soft bounds of the left-right part of the ratio (plan: hard clip of
+# target / fitted; it left flat patches where the nose's cast shadow hit the bound)
+SHAPE_RATIO_CLIP = (0.8, 1.25)  # soft bounds of the target / even-light part alone
 RATIO_SMOOTH_RADIUS = 6  # the ratio is a low-frequency field: box radius at FIT_SIZE, run twice
 TARGET_ELEVATION_DEG = 20.0  # target light: frontal, slightly from above
 TARGET_AMBIENT = 2.0  # soft fill added to the target's key light (relative to the key); the
 # plan's 0.8 shaded the jaw line darker, a larger fill is closer to a studio's wide softbox
-TARGET_FRONTAL_MIX = 1.0  # share of the frontal target; the rest is the room light made even
-# across the face's midline (0 keeps the room's own shading and removes only left-right)
-CHEEK_BALANCE_MAX = 0.5  # smooth left-right ramp exp(k n.m) that evens the cheeks, |k| <= this
+MIRROR_SMOOTH_RADIUS = 6  # left-right correction compares skin brightness averaged by two box
+# passes of this radius (at FIT_SIZE) at each point and at its mirror point
+MIRROR_PASSES = 3  # passes of the left-right correction
+MIRROR_MIN_SKIN = 0.3  # ... over skin pixels brighter than this x the median (bangs are not skin)
 FIT_RIDGE = 1e-3  # small ridge on the l = 2 terms keeps the 9-term fit stable
 FIT_Y_RANGE = (0.004, 0.92)  # skin pixels outside this linear range count as clipped
 RATIO_GF_RADIUS = 4  # guided upsampling of the ratio, radius at FIT_SIZE
