@@ -43,6 +43,183 @@ def test_deferred_fba_keeps_clothing_preview_and_capture_fba_opt_in():
     assert len(calls) == 1 and calls[0][0] == rgb.shape
 
 
+def test_deferred_modnet_checks_the_selected_alpha():
+    from idphoto.checker import Verdict
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    seen = []
+
+    class Model:
+        def predict_alpha(self, raw_rgb, *, capture=False):
+            from tools.presentation_modnet import ModnetPrediction
+
+            alpha = np.full(raw_rgb.shape[:2], 0.2, np.float32)
+            alpha[0, :] = 0
+            return ModnetPrediction(
+                alpha,
+                {"input_width": raw_rgb.shape[1], "input_height": raw_rgb.shape[0],
+                 "capture": capture},
+            )
+
+        def apply_prediction(self, ctx, prediction, background):
+            ctx.alpha = prediction.alpha
+            ctx.output_frame = ctx.relit_frame
+
+    class Check:
+        def evaluate(self, ctx):
+            seen.append(ctx.alpha.copy())
+            passed = float(ctx.alpha.mean()) > 0.5
+            return {7: Verdict(7, "clean_cutout", passed, float(ctx.alpha.mean()), "test")}
+
+    settings = Settings(auto_shutter=False, modnet_demo=True)
+    pipeline = Pipeline(modnet_factory=Model)
+    pipeline.checker = Check()
+    ctx, fired = pipeline.process(rgb, settings, landmarks=lm, defer_modnet=True)
+    assert not fired and ctx.rule_verdicts is None
+
+    pipeline._apply_modnet(ctx, settings, settings.background_linear())
+    ctx, _ = pipeline.finalize_deferred_model(ctx, settings)
+    assert not seen[-1].mean() > 0.5
+    np.testing.assert_array_equal(seen[-1], ctx.alpha)
+    assert not ctx.rule_verdicts[7].passed
+
+
+def test_deferred_modnet_skips_unused_clothing_matting(monkeypatch):
+    rgb, lm, _, _ = clothing_scene("jacket")
+    pipeline = Pipeline()
+
+    def unexpected_clothing(*_args, **_kwargs):
+        raise AssertionError("MODNet must not run the unused Clothing matting pass")
+
+    monkeypatch.setattr(pipeline.matter, "process", unexpected_clothing)
+    ctx, fired = pipeline.process(
+        rgb, Settings(auto_shutter=False, modnet_demo=True), landmarks=lm,
+        defer_modnet=True,
+    )
+
+    assert not fired
+    assert ctx.alpha.shape == rgb.shape[:2]
+    np.testing.assert_array_equal(ctx.alpha, 0)
+    np.testing.assert_array_equal(ctx.output_frame, np.ones_like(ctx.output_frame))
+
+
+def test_deferred_modnet_shutter_resets_and_blocks_uncertain_tracks():
+    from idphoto.checker import AutoShutter, Verdict
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+
+    class Check:
+        def evaluate(self, ctx):
+            return {
+                number: Verdict(number, f"rule_{number}", True, 1.0, "test")
+                for number in range(1, 8)
+            }
+
+    settings = Settings(auto_shutter=True, modnet_demo=True)
+    pipeline = Pipeline()
+    pipeline.shutter = AutoShutter(frames=2)
+    pipeline.checker = Check()
+
+    def finalize(source, track_break=False, ambiguous=False):
+        ctx, _ = pipeline.process(rgb, settings, landmarks=lm, defer_modnet=True)
+        ctx.all_person_alpha = np.full(rgb.shape[:2], 0.9, np.float32)
+        if not ambiguous:
+            ctx.all_person_alpha[0, :] = 0
+        pipeline._select_subject(ctx)
+        assert ctx.subject_status == ("ambiguous" if ambiguous else "ready")
+        ctx.stats["landmark_source"] = source
+        ctx.stats["track_break"] = track_break
+        return pipeline.finalize_deferred_model(ctx, settings)[1]
+
+    assert not finalize("hint")
+    assert pipeline.shutter.count == 0
+    assert not finalize("hint")
+    assert not finalize("native", track_break=True)
+    assert pipeline.shutter.count == 0
+    assert not finalize("native")
+    assert finalize("native")
+    assert not finalize("native", ambiguous=True)
+    assert not finalize("native")
+    assert finalize("native")
+
+
+def test_modnet_track_break_clears_previous_light_and_capture_streak():
+    rgb, lm, _, _ = clothing_scene("jacket")
+
+    class Detector:
+        source = "native"
+        track_break = True
+        calls = 1
+        pitch_deg = yaw_deg = None
+
+        def detect(self, _rgb, _timestamp_ms=None):
+            return lm
+
+    pipeline = Pipeline(detector=Detector())
+    pipeline.relighter.history.append(np.ones(9, np.float32))
+    pipeline.tracker.state = {"stale": True}
+    pipeline.shutter.count = 4
+    pipeline.shutter.armed = False
+    ctx, _ = pipeline.process(
+        rgb, Settings(auto_shutter=False, modnet_demo=True), defer_modnet=True,
+    )
+    assert len(pipeline.relighter.history) == 1
+    assert pipeline.tracker.state is None
+    assert pipeline.shutter.count == 0
+    assert pipeline.shutter.armed
+    assert ctx.stats["track_break"]
+
+
+def test_modnet_full_resolution_capture_uses_its_own_cutout_verdict(monkeypatch):
+    from idphoto.checker import Verdict
+    import idphoto.pipeline as pipeline_module
+
+    rgb, lm, _, _ = clothing_scene("jacket")
+    captures = []
+
+    class Model:
+        def predict_alpha(self, raw_rgb, *, capture=False):
+            from tools.presentation_modnet import ModnetPrediction
+
+            captures.append((raw_rgb.shape, capture))
+            alpha = np.zeros(raw_rgb.shape[:2], np.float32)
+            alpha[raw_rgb.shape[0] // 3:] = 0.9
+            return ModnetPrediction(
+                alpha, {"input_width": raw_rgb.shape[1], "input_height": raw_rgb.shape[0],
+                        "capture": capture},
+            )
+
+        def apply_prediction(self, ctx, prediction, background):
+            ctx.alpha = prediction.alpha
+            ctx.output_frame = ctx.relit_frame
+
+    class Check:
+        def evaluate(self, ctx):
+            assert ctx.geometry is not None
+            assert "crop_box" in ctx.geometry
+            passed = float(ctx.alpha.mean()) > 0.5
+            return {7: Verdict(7, "clean_cutout", passed, float(ctx.alpha.mean()), "test")}
+
+    monkeypatch.setattr(pipeline_module, "Checker", Check)
+    settings = Settings(strength=0, auto_shutter=False, modnet_demo=True)
+    pipeline = Pipeline(modnet_factory=Model)
+    live, _ = pipeline.process(rgb, settings, landmarks=lm, defer_modnet=True)
+    result = pipeline.render_final(rgb, live, settings)
+
+    assert captures[-1] == (rgb.shape, True)
+    assert result["report"]["settings"]["modnet_demo"]
+    assert result["report"]["original_wall_kept"] is False
+    assert result["report"]["rules"][7]["passed"] is True
+    assert np.all(result["ctx"].output_frame[:rgb.shape[0] // 3] == 1)
+
+
+def test_presentation_models_are_mutually_exclusive():
+    rgb, lm, _, _ = clothing_scene("jacket")
+    pipeline = Pipeline()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        pipeline.process(rgb, Settings(fba_demo=True, modnet_demo=True), landmarks=lm)
+
+
 def test_scheduled_capture_matches_synchronous_render():
     import threading
 

@@ -72,7 +72,55 @@ The live view runs on frames downscaled to 640 px wide. When the shutter fires, 
 - `print_sheet_resume_3x4cm_6x4in.jpg` (10 photos) and `print_sheet_id_3.5x4.5cm_6x4in.jpg` (8 photos), 1800 × 1200 at 300 DPI;
 - `report.json`: the seven check values, R_LR before and after, the fitted light, crown and crop boxes. This is data for the evaluation in C.1.
 
-Everything stays on the computer. Nothing is uploaded.
+The app does not intentionally upload photos or video. However, MediaPipe 1.2.0 emitted a failed request to Google's logging endpoint during a local run; its payload was not verified. An offline guarantee therefore requires network isolation.
+
+## Optional local matting experiments
+
+The default app still uses its existing NumPy matting. The experimental MODNet path is opt-in; on Apple Silicon, install the parsing extra and provide a local MODNet ONNX model to try the fixed-grid CoreML provider. BiRefNet is a separate, optional **shutter-only CPU** path: MODNet remains the live preview, and selecting BiRefNet never replaces or silently falls back to another capture model. The expected portrait model SHA-256 is `1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99`; weights are not included or downloaded automatically.
+
+```bash
+uv sync --extra parsing --group dev
+uv run python tools/fetch_model.py
+env -u OMP_NUM_THREADS uv run idphoto \
+  --presentation-modnet \
+  --modnet-model models/modnet.onnx \
+  --modnet-provider coreml-static \
+  --birefnet-model models/birefnet-portrait.onnx \
+  --face-model models/face_landmarker.task \
+  --lang en
+```
+
+For an installed wheel, supply `--face-model /absolute/path/to/face_landmarker.task`; the wheel does not contain the MediaPipe model or fetch script. All model paths must point to local files. Missing dependencies, a missing or hash-mismatched BiRefNet model, or a provider mismatch is an explicit error. See the [Korean report](README_kr.md) for UI behavior, benchmark commands, and local 12-photo comparisons, including FBA combinations and shape priors. Those stills have no ground-truth masks, and several thresholds were selected while viewing the same photos; they are diagnostic examples, not an accuracy claim or evidence of generalization.
+
+In MODNet mode, faces are collected from the full frame and overlapping crops, deduplicated, and selected by Euclidean distance from the face bounding-box centre to the image centre; an exact tie favours the leftmost face, then the uppermost. The selected face supplies pose and geometry. If full and crop detection find no face, the previous-position hint and two rotating search tiles are also checked in the current frame. The all-person matte is retained for wall estimation; selected-person ownership uses foreground components above alpha 0.02. A shared component, an unexplained component of at least max(64 pixels, 0.05% of the frame), missing face, or missing background samples causes abstention. Pending or ambiguous frames show a solid background and disable capture; the Before shortcut cannot reveal the raw frame in this mode. When several faces are detected, “original wall” uses a solid estimated wall colour, and a failed cutout check does not restore the raw wall with other people in it. The selected subject and ownership are rechecked on the frozen MODNet or BiRefNet capture frame.
+
+This is a conservative heuristic, not person-instance identification: faces can be missed, especially when small, turned away or occluded, and undetected people connected to the selected foreground may remain. Detection, separation and occluded-body reconstruction are not guaranteed. On one public synthetic pair with separated bodies it removed the other person; touching and overlapping pairs abstained. A real public NASA five-person photograph produced no detected face and abstained. The 12 local single-person photos had unchanged live alpha, rendered pixels and checker decisions compared with the prior face path, using the same MODNet CPU predictions; they do not establish accuracy.
+
+An 80-second public-video replay after restoring frozen manual captures, with window exposure observed and outbound networking denied for the process, reached 25.29 fully processed paints/s and 77.10 ms p95, but one 10-second window was below 24/s (23.9/s), so the sustained gate **failed**. A separate one-shutter run also failed the rate gate (24.26/s overall, minimum window 20.9/s, 78.84 ms p95). Its manual BiRefNet capture produced and displayed the requested frame after a live track change, but the capture interval reached only 19.80 fully processed paints/s. A real local BiRefNet capture of a separated synthetic pair also produced the selected subject. These results do not establish physical-camera performance or identity stability through display.
+
+An isolated detector profile on 60 sampled public-video frames and four public multi-person images measured 12.0 ms median total face detection; median full, left, right and centre calls were 3.68, 0.82, 0.84 and 3.48 ms respectively. The left and right crops each found faces missed by earlier views in the synthetic group examples. The centre crop added none in this small sample, but can independently find a more central face; skipping it is not supported as a safe optimization. These isolated timings are not additive whole-app replay timings.
+
+An installed-wheel CPU/CoreML alpha comparison on the 12 local evaluation photos used ONNX Runtime 1.32.0. `CoreMLExecutionProvider` was active on all photos across the tested fixed grids `512x288`, `512x352`, and `512x672`. The float alpha arrays were not bitwise identical; maximum and mean absolute differences were `1.76e-5` and `3.45e-8`, and the lowest binary-mask IoU at alpha 0.5 was `0.99999983`. These are implementation-parity measurements, not ground-truth accuracy.
+
+The first strict 80-second replay passed the sustained preview gate but failed its capture gate: the capture checker raised before a visible result dialog. The checker runs after the BiRefNet matte call, so that failure does not establish that inference never ran. After fixing the missing native-frame input to the sharpness check, a fresh 80-second replay used the same five public clips in the order `0004 → 0000 → 0001 → 0002 → 0003`, 30 Hz pacing, 3-second warmup, and one manual capture at +13.000 seconds. It produced one CPU BiRefNet result and a visible dialog, with verified frame/crop lineage. The press-to-dialog interval was 8.027 seconds; during that interval fully processed preview paints were 26.54/s, p95 source-read-to-paint was 90.81 ms, and the endpoint-inclusive longest paint gap was 104.28 ms.
+
+That replay **failed the overall sustained preview gate**: 23.81 fully processed paints/s across 80.001 seconds, full-run p95 105.35 ms, and the final four 10-second windows were 17.7, 16.3, 20.9, and 19.5 paints/s (below 24/s). The first four windows were 27.6–29.6/s. A matched-frame comparison shows later increases in source-read-to-prepare and job-finish-to-finalize latency, while model queue wait stays low; the available traces do not establish the cause. The capture-only gate passing is not evidence that the full preview requirement passes. Both strict replay reports preserve their individual outcomes. These were local public-video replays, not camera tests.
+
+#### Latest live-wall and shutter retest
+
+The MODNet **live preview only** now uses a packed OpenCV wall-estimator implementation; the reference estimator remains in use for full-resolution BiRefNet shutter rendering. Before integration, an isolated 20-pair/case synthetic benchmark at 640 × 360 verified bit-exact global/local wall arrays, composites, encoded pixels, and rule-7 decisions on edge cases. Its median estimator time changed from 13.87 ms to 7.53 ms (p95 18.22 ms to 12.40 ms), with both AB and BA execution orders improving. The same candidate was then checked against cached real RGB/alpha pairs from all 12 local photos: wall fields, rendered floats/bytes, and rule-7 verdicts were exact. These are implementation equivalence and timing checks, not mask accuracy.
+
+With that code, a fresh 80-second no-shutter run averaged 26.94 fully processed paints/s and had full-run p95 below 100 ms, but its 40–50 s and 50–60 s windows reached only 21.3 and 22.5/s; the sustained gate failed. A separate fresh run with one +13 s manual shutter passed the full replay gate: 29.44 fully processed paints/s on average, all eight 10-second windows at or above 24/s, and full-run p95 source-read-to-paint 71.99 ms. Exactly one full-resolution CPU BiRefNet inference and visible `ResultDialog` were linked to source frame 485 and its recorded crop; press-to-result was 9.030 s. The press-to-result preview interval itself was 26.91 paints/s with p95 89.68 ms; including both endpoints, the longest paint gap was 309.12 ms (reported, not separately gated). A single successful shutter run does not erase the no-shutter sustained failure or establish a universal performance guarantee, and the observed rate change cannot be attributed solely to the estimator from separate runs.
+
+An already-frozen manual BiRefNet photo remains bound to its original frame and selected subject if the live track later changes. A change before freezing rejects the request; automatic captures and stale live previews are still invalidated, as are captures after settings or mode changes.
+
+The new JSON/CSV files `modnet-live-wall-fast-no-shutter-80s` and `modnet-live-wall-fast-one-shutter-80s` preserve the matched replay outcomes. The CSVs now also include per-frame landmark, relight, matting, geometry, and checker timings. The tests use public video clips and local model files; no camera was opened.
+
+A follow-up source-only diagnostic found that 30 Hz decoding and resizing of public 4K clip `0002` used about 2.8 process-CPU seconds per wall second, versus about 0.97–1.02 for the other clips, without the app or model running. This can add contention in replay, but does not explain the entire slowdown: the no-shutter run also slowed during `0001`. An isolated CoreML ORT spinning probe showed negligible idle CPU and no meaningful paced CPU reduction from disabling spinning. No runtime or replay settings were changed, and the sustained failure remains unresolved.
+
+On the same product code, a later **exposure-verified no-shutter series** passed all three pre-specified 80-second attempts: 29.83, 29.81, and 29.81 fully processed paints/s, with full-run p95 57.76, 54.15, and 51.91 ms. All eight 10-second windows in each attempt were at least 29.3 paints/s and had p95 at most 75.55 ms. No fresh result lacked a paint. The harness kept the window on top, raised and activated it once, and used `caffeinate -d -i`; exposure/visibility/minimization were sampled and Qt exposure changes recorded. All three stayed exposed and visible. These extra harness conditions differ from the earlier failed run, whose exposure was not recorded; the failure and its cause remain unresolved. The series is not a camera test or a general performance guarantee.
+
+After the earlier wall timing runs, a fresh wheel was built and installed into an environment outside the checkout. Its 12-photo 640 px CPU/CoreML alpha comparison used ONNX Runtime 1.32.0: CoreML was active on all photos for grids `512x288`, `512x352`, and `512x672`; max/mean absolute alpha differences were `1.42e-5` and `3.28e-8`, with minimum 0.5-mask IoU `1.0`. The installed wheel's CLI help worked, and its direct, crop-reacquisition, and reset landmark paths each detected 478 points using an explicitly supplied local face model. This was an installed-artifact check on cached local evaluation inputs, not a ground-truth accuracy result or camera test.
 
 ## Tools
 
@@ -89,7 +137,7 @@ Everything stays on the computer. Nothing is uploaded.
 | `uv run python tools/replay_frames.py out/debug/<folder>` | Re-runs the pipeline on saved frames, to compare a code change on real rooms |
 | `uv run python tools/extract_canonical_mesh.py` | Rebuilds `idphoto/data/canonical_face_mesh.npz` from the model bundle |
 
-Tests: `uv run pytest` (192 tests, about 15 s).
+Tests: `uv run pytest` (331 passed, 2 skipped in the latest local run).
 
 ## Results so far
 

@@ -31,13 +31,88 @@ uv run --extra fba idphoto --presentation-fba --fba-device mps --lang ko
 
 카메라 권한은 사용자가 직접 허용해야 합니다. `--presentation-fba`를 넣어야 **FBA + Clothing (비상업 발표 전용)**이 보이며 기본은 꺼져 있습니다. 선택하면 같은 프레임에서 Clothing alpha의 자동 트라이맵으로 FBA를 실행하고, FBA 전경색을 선형광으로 변환해 조명 비율을 적용한 뒤 합성합니다. Main은 옷 개선을 끈 상태, Clothing은 옷 개선만 켠 상태입니다. FBA 옵션은 Clothing이 켜져 있을 때만 선택할 수 있습니다. FBA 전경과 alpha는 기존 NumPy 합성과 달라 색상이 일치하지 않을 수 있습니다.
 
-선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유가 표시됩니다. 가중치 검사에 실패하면 다른 결과로 조용히 대체하지 않습니다. 영상과 사진은 외부로 보내지 않습니다.
+선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유가 표시됩니다. 가중치 검사에 실패하면 다른 결과로 조용히 대체하지 않습니다. 앱은 영상과 사진을 의도적으로 업로드하지 않습니다. 다만 로컬 실행 중 MediaPipe 1.2.0이 Google 로그 주소로 실패한 요청을 남겼고 요청 내용은 확인하지 못했습니다. 네트워크 격리 없이는 완전한 오프라인 동작을 보증할 수 없습니다.
 
 **FBA는 실시간 영상이 아닙니다.** 기존에는 카메라 획득과 Qt UI는 별도였지만 처리 Worker가 매 프레임 FBA를 기다려 미리보기 갱신이 느려졌습니다. FBA 선택 시 큰 카메라 화면은 마지막으로 완료된 **FBA 스냅샷**과 그 프레임의 경과 시간을 보여 주며, 옆에 Clothing 실시간 미리보기가 따로 표시됩니다. 첫 스냅샷을 기다리거나 얼굴을 찾지 못할 때 큰 화면도 Clothing을 표시합니다. FBA 작업은 동시에 하나만 실행하며 대기 미리보기는 최신 한 장으로 교체합니다. 이전 프레임의 alpha를 새로운 영상에 덧씌우지 않습니다. 촬영 요청은 대기 미리보기보다 우선하고 촬영 시점의 프레임과 설정으로 전체 해상도 FBA를 별도 실행하므로 시간이 더 걸릴 수 있습니다. 촬영 중 상태가 표시되며 중복 촬영은 허용하지 않습니다.
 
-**검사와 자동 촬영은 Clothing 미리보기 기준**입니다. 따라서 배경 점검 실패 시 원래 벽을 유지하는 촬영 fallback도 Clothing 기준이고, 과거 FBA alpha 기준 검사와 판정이 다를 수 있습니다. 최종 사진은 저장된 스냅샷이 아니라 촬영 프레임의 FBA 결과입니다. 결과가 느리거나 실패하면 상태에 표시됩니다. Main과 Clothing 단독 모드는 기존과 같습니다.
+**검사와 자동 촬영은 Clothing 미리보기 기준**입니다. 따라서 배경 점검 실패 시 원래 벽을 유지하는 촬영 fallback도 Clothing 기준이고, 과거 FBA alpha 기준 검사와 판정이 다를 수 있습니다. 최종 사진은 저장된 스냅샷이 아니라 촬영 프레임의 FBA 결과입니다. 배경이나 조명 강도를 변경하면 변경 이전에 촬영된 미완료 스냅샷은 설정을 다시 되돌려도 표시하지 않습니다. 결과가 느리거나 실패하면 상태에 표시됩니다. Main과 Clothing 단독 모드는 기존과 같습니다.
+
+#### 실험용 MODNet 인물 분리
+
+공식 [MODNet 코드와 모델](https://github.com/ZHKKKe/MODNet)은 Apache-2.0 조건을 확인한 뒤 로컬에 별도로 준비합니다. 가중치는 저장소에 넣지 않으며 자동으로 내려받지 않습니다. 선택 의존성 설치 후 `--presentation-modnet --modnet-model <로컬 ONNX 경로>`로만 켜는 별도 실험 경로이며 FBA와 동시에 선택할 수 없습니다. MODNet alpha가 해당 모드의 자르기 기하, 검사, 자동 촬영과 촬영 시 재추론을 결정합니다. 기본 CPU와 `coreml-static`은 입력 프레임의 실제 종횡비에 맞춘 32배수 grid에서 너비 최대 512px로 추론하고 alpha를 원본 크기로 되돌립니다. `coreml-static`은 고정-shape MLProgram이며 체크섬·grid·provider·ONNX Runtime 버전별 로컬 캐시를 씁니다. 첫 grid는 모델 Worker에서 dummy 추론까지 준비하고, 준비 중인 프레임은 미리보기나 성능 결과로 세지 않습니다. 검증되지 않은 동적 CoreML provider 선택은 거부합니다. 이 경로는 품질이나 실시간 성능을 보증하는 기본값이 아닙니다.
+
+MODNet 모드에서는 기존 Main/Clothing 매팅을 우회합니다. 전체 프레임과 겹치는 crop에서 얼굴을 찾고 중복을 제거한 뒤 얼굴 경계 상자 중심과 사진 중심의 픽셀 거리로 선택합니다. 거리가 정확히 같으면 왼쪽, 그다음 위쪽 얼굴을 선택합니다. 얼굴이 없으면 이전 위치 힌트와 순환 검색 타일 2개를 현재 프레임에서 추가로 검사합니다. 선택된 얼굴의 자세·기하·검사를 사용하고 track이 바뀌면 smoothing과 연속 촬영 횟수를 초기화하며 이전 track의 대기 미리보기를 폐기합니다.
+
+전체 인물 alpha는 벽색 추정에 사용하고, alpha 0.02 초과 연결 영역에서 선택 인물만 남깁니다. 여러 얼굴이 같은 영역을 공유하거나 설명되지 않은 큰 영역(64픽셀과 화면의 0.05% 중 큰 값 이상), 얼굴 없음, 배경 샘플 없음이면 판정을 보류합니다. 대기·보류 중에는 단색 배경과 안내를 표시하고 촬영을 막으며, 이 모드의 Before도 원본을 노출하지 않습니다. 여러 얼굴이 검출된 경우 원래 배경 선택은 추정한 단색 벽으로 대체하고, 배경 점검 실패 시에도 다른 사람이 포함된 원본 벽으로 되돌리지 않습니다. 촬영 프레임은 MODNet 또는 BiRefNet 재추론 후 같은 선택을 다시 검증합니다.
+
+이는 얼굴 중심을 이용한 보수적 추정이지 인물 인스턴스 식별이 아닙니다. 작거나 돌아섰거나 가려진 얼굴을 놓칠 수 있으며, 검출되지 않은 사람이 선택 영역과 이어져 있으면 남을 수 있습니다. 공개 인물 사진을 합성한 분리 사례에서는 다른 사람을 제거했고 접촉·겹침 사례는 보류했습니다. 공개 NASA 5인 사진에서는 얼굴을 찾지 못해 보류했습니다. 로컬 단독 인물 12장의 CPU alpha·출력 픽셀·검사 판정은 이전 얼굴 경로와 같았지만 정확도를 뜻하지는 않습니다.
+
+고정된 수동 촬영을 복원한 뒤 네트워크 송신을 차단하고 창 노출을 관찰한 80초 공개 영상 무셔터 리플레이는 완전 처리 paint 평균 25.29회/초, p95 77.10ms였지만 10초 창 하나가 24회/초 미만(23.9)이어서 지속 기준을 **통과하지 못했습니다**. 별도 1회 셔터 실행도 속도 기준에 실패했습니다(전체 24.26회/초, 최저 창 20.9회/초, p95 78.84ms). 수동 BiRefNet 촬영은 live track이 바뀐 뒤에도 요청 프레임의 결과를 표시했지만, 촬영 구간은 19.80회/초에 그쳤습니다. 분리된 공개 합성 사진의 실제 BiRefNet 로컬 촬영도 선택 인물을 출력했습니다. 실제 카메라 성능이나 결과 표시까지의 신원 안정성을 보장하는 결과는 아닙니다.
+
+공개 영상 표본 60프레임과 공개 다인 이미지 4장을 이용한 독립 검출 측정에서 전체 얼굴 검출 시간 중앙값은 12.0ms였고 전체·왼쪽·오른쪽·중앙 호출의 중앙값은 각각 3.68·0.82·0.84·3.48ms였습니다. 합성 다인 사례에서는 좌우 crop이 앞선 검출에서 놓친 얼굴을 찾았습니다. 이 작은 표본에서 중앙 crop이 추가한 얼굴은 없었지만 별도의 더 중앙 얼굴을 찾을 수도 있어 안전하게 생략할 근거는 없습니다. 이 독립 측정값을 전체 앱 리플레이의 시간과 단순 합산할 수는 없습니다.
+
+#### 옵트인 촬영용 BiRefNet
+
+`--birefnet-model`은 MODNet 실험 안에서만 선택할 수 있는 촬영 전용 모델입니다. live preview와 512px MODNet/CoreML 처리는 그대로이고 BiRefNet은 촬영 프레임의 전체 해상도 결과에만 사용합니다. 별도 worker lane에서 CPU `CPUExecutionProvider`로 추론하므로 미리보기를 직렬 대기시키지는 않지만, 실제 paint rate를 보장하지 않습니다. 이 경로는 정식 기본값이 아닌 평가용 선택지입니다. 필요한 ONNX Runtime·Pillow는 `parsing` extra에 있으며 모델은 자동으로 받지 않습니다. 파일 SHA-256이 `1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99`와 다르거나 의존성·파일이 없으면 명시적으로 실패하고 다른 모델로 대체하지 않습니다. `OMP_NUM_THREADS`가 설정되어 있어도 거부합니다. 모델 출처의 라이선스와 사용 조건을 별도로 확인하고, 가중치를 저장소나 wheel에 포함하지 마세요.
+
+Apple Silicon에서 실제 카메라로 실행하는 예:
+
+```bash
+uv sync --extra parsing --group dev
+uv run python tools/fetch_model.py
+env -u OMP_NUM_THREADS uv run idphoto \
+  --presentation-modnet \
+  --modnet-model models/modnet.onnx \
+  --modnet-provider coreml-static \
+  --birefnet-model models/birefnet-portrait.onnx \
+  --face-model models/face_landmarker.task \
+  --lang ko
+```
+
+설치한 wheel은 저장소의 `models/`나 `tools/fetch_model.py`를 포함하지 않으므로, 설치본을 checkout 밖에서 실행할 때도 `--face-model /절대/경로/face_landmarker.task`로 로컬 MediaPipe 모델을 지정해야 합니다. MODNet·BiRefNet 가중치도 각각 명시한 로컬 경로만 사용합니다.
+
+공개 움직임 영상으로 Worker부터 선택된 Qt 메인 화면의 실제 paint event까지 숫자만 측정하려면 다음 도구를 사용합니다. 입력은 로컬 파일 경로로 직접 지정하며 사진/영상 결과는 저장하지 않고 JSON/CSV 계측만 기록합니다. 기본 측정은 첫 얼굴 결과의 paint 후 3초 warmup을 두고 60초 이상 실행합니다. 첫 결과까지의 준비 시간은 steady-state 측정과 별도로 기록합니다. 보고서에는 source-read→전처리, 모델 작업 대기·추론, 후처리·검사와 paint까지의 프레임별 시각 및 단계별 지연 분포, 전체/얼굴 감지/7개 rule 평가까지 끝난 결과 수, 모든 완전한 10초 창의 rate gate가 포함됩니다. paint event 시간은 센서 지연이나 물리 화면의 표시 완료 시간이 아닙니다.
+
+```bash
+uv sync --extra parsing --group dev
+QT_QPA_PLATFORM=offscreen uv run --extra parsing --group dev \
+  python tools/bench_modnet_live.py --model /local/modnet.onnx \
+  --video /local/public-clip-1.mp4 /local/public-clip-2.mp4 \
+  --out out/modnet-live.json
+```
+
+촬영 구간을 함께 측정하려면 CoreML preview와 BiRefNet CPU를 명시해 한 번의 셔터 요청을 추가합니다:
+
+```bash
+env -u OMP_NUM_THREADS uv run --extra parsing --group dev \
+  python tools/bench_modnet_live.py --model models/modnet.onnx \
+  --provider coreml-static --birefnet-model models/birefnet-portrait.onnx \
+  --capture-offset-seconds 13 --duration-seconds 80 \
+  --video /local/public-clip-1.mp4 /local/public-clip-2.mp4 \
+  --out out/modnet-live-capture.json
+```
+
+요청된 촬영 run은 정확히 한 worker 결과와 실제 `ResultDialog` open, BiRefNet의 CPU provider·inference 통계, 요청에 연결된 source frame ID/timestamp 및 crop, 그리고 press→dialog 구간 자체의 fully-processed paint ≥24/s와 source-read→paint p95 ≤100 ms를 모두 만족해야 CLI 성공입니다. 누락·중복 결과, 거부된 dialog, 근거 없는 모델 실행이나 구간 gate 실패는 nonzero 종료합니다. 결과창 양 끝을 포함한 최장 paint 공백도 보고하지만 별도 상한은 주장하지 않습니다.
 
 참고 계측: Apple M4 Pro, 같은 shot3의 640×360 프레임·캐시 랜드마크, strength 0, 실제 로컬 FBA 가중치(타일 768, 겹침 96, Torch 4 threads). 카메라·랜드마크 검출·화면 렌더링은 제외했습니다. 변경 전 단일 처리 경로에서 8회 warm 평균은 Main 33.2 ms, Clothing 36.3 ms, FBA + Clothing 273.1 ms(3.66 fps), FBA 첫 프레임 684.5 ms였습니다. 비동기 처리의 오프스크린 Worker에 같은 프레임을 최대 30 fps로 공급하고 첫 2초를 제외한 8초를 측정한 결과 Main 27.0 fps, Clothing 25.75 fps, FBA 선택 시 Clothing 처리 22.125 fps와 FBA 스냅샷 4.0 fps, 스냅샷 평균 경과 0.335초였습니다. 별도 추론도 CPU를 공유하므로 미리보기가 항상 부드럽다는 보장은 없습니다. 이는 실제 카메라/네이티브 화면 측정이 아니며 환경과 입력 해상도에 따라 달라집니다. 실제 네이티브 앱 창·카메라 동작은 이 환경에서 검증하지 못했습니다.
+
+최근 80초 공개 영상 replay에서는 전체 MODNet preview gate가 통과했습니다(7개 rule까지 처리한 paint 28.56/s, 전체 p95 80.61 ms). 그러나 촬영 요청부터 worker 결과까지 9.519초 동안 224 paint, 즉 23.53/s로 별도 24/s 기준에 미달했고, 구간 p95 95.19 ms는 통과했지만 요청·결과 양 끝을 포함한 최장 paint 공백은 407.39 ms였습니다. 원시 CSV에서 preview frame 762는 model job 완료 뒤 finalize까지 393.99 ms가 더 걸렸고, 인접 frame 763도 추론 완료 뒤 job 완료까지 254.63 ms가 걸렸습니다. 따라서 공백을 UI paint만으로 설명할 수 없으며 capture 후처리·공유 runtime 경합과 preview finalize 경계를 우선 조사할 후보로 볼 수 있지만, 원인은 확정되지 않았습니다. 이 실행은 strict gate 계측을 추가하기 전이라 ResultDialog 표시, 촬영 BiRefNet stats, 촬영 source frame/crop 연결을 기록하지 않았습니다. 따라서 capture gate는 실패로 재분류했으며, 느린 촬영 중 live 성능이 기준을 만족한다고 주장하지 않습니다. 실제 카메라가 아닌 공개 영상 입력입니다.
+
+#### 최신 live wall·셔터 재검증
+
+MODNet의 **live preview에만** packed OpenCV 벽 색 추정기를 적용했습니다. 전체 해상도 BiRefNet 셔터 렌더링은 기존 기준 구현을 계속 사용합니다. 적용 전 640 × 360 합성 입력 4종을 20쌍씩 비교해 전역/지역 wall 배열, composite, 인코딩 결과와 rule 7 판정이 모든 경계 사례에서 bit 단위로 같음을 확인했습니다. 기준 구현 대비 추정기 중앙값은 13.87 ms에서 7.53 ms, p95는 18.22 ms에서 12.40 ms로 줄었고 AB·BA 순서 모두 개선됐습니다. 이어 로컬 12장 캐시의 RGB/alpha 쌍에서도 wall 배열, 렌더링 float/byte, rule 7 판정이 모두 같았습니다. 이는 구현 동등성과 실행시간 검증이지 정답 마스크 정확도 평가가 아닙니다.
+
+새 코드로 별도 실행한 80초 무셔터 측정은 7개 검사까지 끝난 paint가 평균 26.94/s, 전체 p95는 100 ms 미만이었으나, 40–50초와 50–60초 구간은 각각 21.3/s와 22.5/s로 sustained gate에 실패했습니다. 다른 fresh process에서 +13초 수동 셔터 1회를 포함한 측정은 전체 gate를 통과했습니다: 완전 처리 paint 평균 29.44/s, 10초 구간 8개 모두 24/s 이상, 전체 source-read→paint p95 71.99 ms였습니다. 실제 전체 해상도 CPU BiRefNet 추론과 화면에 표시된 `ResultDialog`는 정확히 한 번이었고 source frame 485 및 crop과 연결됐습니다. 버튼→결과는 9.030초였습니다. 해당 촬영 구간 자체는 26.91 paint/s, p95 89.68 ms이며, 요청과 결과 양끝을 포함한 최장 paint 공백 309.12 ms도 기록했지만 별도 통과 기준은 아닙니다. 성공한 셔터 실행 하나가 무셔터 sustained 실패를 없애거나 항상 같은 성능을 보장하지 않으며, 별도 실행 간 차이를 wall 추정기 하나의 효과라고 단정할 수 없습니다.
+
+이미 고정된 수동 BiRefNet 사진은 이후 live track이 바뀌어도 원래 프레임과 선택 인물을 유지합니다. 고정 전에 track이 바뀐 요청, 자동 촬영, 오래된 live 미리보기, 설정이나 모드가 바뀐 촬영은 계속 폐기합니다.
+
+새 JSON/CSV `modnet-live-wall-fast-no-shutter-80s` 및 `modnet-live-wall-fast-one-shutter-80s`에 두 replay 결과를 보존했습니다. CSV에는 프레임별 landmark, relight, matting, geometry, checker 시간도 추가했습니다. 공개 영상과 로컬 모델만 사용했으며 실제 카메라를 열지 않았습니다.
+
+후속 source 단독 계측에서 공개 4K 영상 `0002`의 30 Hz 디코딩·축소는 앱과 모델 없이도 프로세스 CPU 시간/실시간 비율이 약 2.8이었고, 다른 영상은 약 0.97–1.02였습니다. Replay 경합에 영향을 줄 수 있지만 무셔터 실행은 `0001`에서도 느려졌으므로 이것만으로 전체 원인을 확정할 수 없습니다. 별도 CoreML ORT spinning 실험에서는 유휴 CPU 사용이 미미했고 spinning을 꺼도 paced CPU가 유의하게 줄지 않았습니다. runtime이나 replay 조건은 바꾸지 않았으며 sustained 실패는 미해결입니다.
+
+같은 제품 코드의 후속 **창 노출 확인 무셔터 시리즈**는 사전 지정한 80초 실행 3회가 모두 통과했습니다. 완전 처리 paint 평균은 각각 29.83, 29.81, 29.81/s, 전체 p95는 57.76, 54.15, 51.91 ms였습니다. 각 실행의 10초 구간 8개 모두 29.3/s 이상, p95 75.55 ms 이하여서 기준을 만족했고 미표시 fresh 결과는 없었습니다. Harness에서 창을 항상 위에 두고 시작 시 한 번 올리고 활성화했으며 `caffeinate -d -i`를 적용했습니다. Qt 노출 변화와 노출·가시·최소화 상태 샘플을 기록했고 세 실행 모두 노출·가시 상태가 유지됐습니다. 이는 창 노출을 기록하지 않은 이전 실패 실행과 harness 조건이 다르므로 그 실패와 원인은 여전히 미해결입니다. 실제 카메라 시험이나 일반적인 성능 보장은 아닙니다.
+
+앞선 wall 타이밍 실행 후 새 wheel을 만들어 checkout 밖의 별도 환경에 설치했습니다. 설치본으로 로컬 640 px 입력 12장의 CPU/CoreML alpha를 비교한 결과, ONNX Runtime 1.32.0에서 세 grid(`512x288`, `512x352`, `512x672`) 모두 CoreML이 실제 활성화됐습니다. alpha 절대 차이는 최대/평균 `1.42e-5`/`3.28e-8`, alpha 0.5 mask 최소 IoU는 `1.0`이었습니다. 설치된 wheel의 CLI 도움말이 실행됐고, 명시한 로컬 얼굴 모델을 이용한 일반 검출·crop 재획득·reset 후 검출이 각각 478개 landmark를 반환했습니다. 이는 캐시된 로컬 평가 입력과 wheel 설치 검증이며 정답 정확도나 실제 카메라 검증은 아닙니다.
 
 #### Apple GPU 가속 실험
 
@@ -46,6 +121,10 @@ uv run --extra fba idphoto --presentation-fba --fba-device mps --lang ko
 같은 M4 Pro와 shot3 프레임의 30 fps 고정 입력, 최초 3초 제외 9초 오프스크린 Worker 계측에서 **CPU FBA 3.33 fps / 평균 프레임 경과 388 ms**, **MPS FBA 9.00 fps / 197 ms**였습니다. Clothing 처리는 각각 19.78 / 21.44 fps였으나 큰 FBA 화면은 해당 속도로 갱신되지 않습니다. MPS도 24 fps에 도달하지 않았고 실제 카메라·검출·화면 렌더링은 포함하지 않습니다.
 
 같은 12장·640 px 입력의 CPU와 MPS 출력을 비교하면 alpha 차이는 최대 0.00002769였고 alpha 0.5 기준 분류가 바뀐 픽셀은 전체에서 1개였습니다. [사진별 CSV](docs/evaluation/clothing/fba-performance/cpu-mps.csv)는 정답 정확도가 아닌 두 구현 간 차이입니다. 모델 입력을 320 px로 줄인 후보는 shot3 오프스크린에서 약 20.7 fps였지만 여전히 24 fps 미만이었고, test9에서 기존 결과 대비 alpha > 0.5 픽셀 23,804개가 낮아지는 등 차이가 커 채택하지 않았습니다. 이 픽셀에는 옷과 배경이 모두 포함될 수 있습니다.
+
+이전 FBA 합성 이미지를 광학 흐름으로 이동하고 불확실한 픽셀을 Clothing으로 대체하는 후보도 12장, 라이브·전체 격자, 합성 이동·가림·밝기 변화로 비교했지만 앱에 넣지 않았습니다. 이동 시에는 같은 프레임의 새 FBA에 가까워졌으나 밝기를 올린 경우 라이브 12장 중 8장에서 FBA 경계 영역의 평균 색 차이가 이전 스냅샷보다 컸고, 머리와 옷에 구멍이 보였습니다. 실제 영상이나 정답 마스크가 아닌 합성 비교이며 전체 격자도 640px 입력입니다. 이 방법은 배경 누출을 해결하지 못하고 새 FBA 추론 속도를 높이지도 않습니다.
+
+별도로 이전 **alpha**를 밝기 정규화·양방향 흐름으로 이동하고 현재 프레임과 현재 벽 추정으로 합성하는 후보도 시험했습니다. ±22 밝기, 0.8/1.2배 노출, 이동과 가림·가려졌다 드러남을 합성한 12장 비교에서 느린 이동의 라이브 alpha 평균 절대 차이는 새 FBA 대비 0.0321 → 0.0167로 줄었습니다. 다만 안전 조건은 빠른 이동과 이동·가림·밝기 복합 사례 모두를 거부해 오래된 스냅샷을 그대로 두었고, 정지 영상에서도 정확한 새 FBA alpha를 재사용해 현재 프레임으로 합성하면 FBA 전경색 합성과 경계 RGB가 평균 4.9/255 차이 났습니다. 옆 배경 누출도 남아 채택하지 않았습니다. 이 비교의 RGB 차이와 alpha 차이는 별개의 지표이며 모두 정답 오차가 아닌 새 FBA와의 차이입니다. 실제 카메라·움직임 영상이나 원본 해상도 촬영 성능은 검증하지 않았습니다.
 
 동일 자산과 캐시 랜드마크, MPS가 있는 환경에서 수치 비교와 Worker 계측을 재현합니다. 입력 사진이나 합성 이미지는 출력하지 않습니다.
 

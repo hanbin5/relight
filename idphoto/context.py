@@ -22,6 +22,10 @@ class FrameContext:
     light_coeffs: np.ndarray | None = None  # A: float32 (9,) fitted SH light, 5-frame average
     relit_frame: np.ndarray | None = None  # A: float32 (H, W, 3) linear frame, relit
     alpha: np.ndarray | None = None  # B: float32 (H, W) foreground mask in [0, 1]
+    all_person_alpha: np.ndarray | None = None  # added: foreground excluded from wall estimation
+    subject_faces: tuple = ()  # added: face meshes from this frame, in frame coordinates
+    subject_index: int | None = None  # added: chosen entry in subject_faces
+    subject_status: str | None = None  # added: pending, ready, no_face, or ambiguous
     output_frame: np.ndarray | None = None  # B: float32 (H, W, 3) relit frame on the new background
     rule_verdicts: dict | None = None  # D: rule number -> Verdict
     geometry: dict | None = None  # C: crown, chin, eye center, pose angles, crop box
