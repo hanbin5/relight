@@ -41,8 +41,11 @@ STRINGS = {
     "fba_capturing": {"en": "Rendering FBA capture…", "ko": "FBA 촬영 결과 처리 중…"},
     "fba_clothing_preview": {"en": "Clothing · live preview", "ko": "Clothing · 실시간 미리보기"},
     "fba_error": {"en": "FBA error: {err}", "ko": "FBA 오류: {err}"},
-    "modnet_demo": {"en": "MODNet (experimental, local model)",
-                    "ko": "MODNet (실험용, 로컬 모델)"},
+    "modnet_demo": {"en": "MODNet alpha (pretrained comparison; off = traditional)",
+                    "ko": "MODNet 알파 (사전학습 비교; 끄면 전통 방식)"},
+    "modnet_enable_hint": {
+        "en": "Enable with --presentation-modnet and a local model and dependencies.",
+        "ko": "--presentation-modnet 옵션과 로컬 모델·선택 의존성이 필요합니다."},
     "modnet_demo_tip": {
         "en": "Apache-2.0 model; experimental asynchronous matting. The first frame prepares the model.",
         "ko": "Apache-2.0 모델, 실험용 비동기 매팅입니다. 첫 프레임은 모델을 준비합니다."},

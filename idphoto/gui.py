@@ -1038,7 +1038,7 @@ class MainWindow(QMainWindow):
         self.birefnet_error = None
         self.birefnet_runtime_error = None
         self.presentation_fba = presentation_fba
-        self.presentation_modnet = presentation_modnet
+        self.modnet_opted_in = presentation_modnet
         self.face_model_path = Path(face_model).expanduser() if face_model else None
         self.model_generation = 0
         self.auto_shutter_generation = 0
@@ -1097,6 +1097,9 @@ class MainWindow(QMainWindow):
                     "BiRefNet portrait capture requires an available MODNet preview: "
                     + (self.modnet_error or "MODNet is unavailable.")
                 )
+        else:
+            self.modnet_error = t("modnet_enable_hint", lang)
+            self.birefnet_error = t("modnet_enable_hint", lang)
         self.dialog = None
         self.closing = False
         self.view = LiveView()
@@ -1269,23 +1272,23 @@ class MainWindow(QMainWindow):
         self.modnet_preview_label = None
         self.birefnet_box = None
         self.birefnet_status = None
-        if self.presentation_modnet:
-            self.modnet_box = QCheckBox()
-            self.modnet_box.setEnabled(self.modnet_factory is not None)
-            self.modnet_box.toggled.connect(self.set_modnet)
-            v.addWidget(self.modnet_box)
-            self.modnet_status = QLabel()
-            self.modnet_status.setWordWrap(True)
-            v.addWidget(self.modnet_status)
-            self.modnet_preview_label = QLabel()
-            v.addWidget(self.modnet_preview_label)
-            self.modnet_image = QLabel()
-            self.modnet_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            v.addWidget(self.modnet_image)
-            if self.modnet_error:
-                self.modnet_warning = QLabel(self.modnet_error)
-                self.modnet_warning.setWordWrap(True)
-                v.addWidget(self.modnet_warning)
+        self.modnet_box = QCheckBox()
+        self.modnet_box.setEnabled(self.modnet_factory is not None)
+        self.modnet_box.toggled.connect(self.set_modnet)
+        v.addWidget(self.modnet_box)
+        self.modnet_status = QLabel()
+        self.modnet_status.setWordWrap(True)
+        v.addWidget(self.modnet_status)
+        self.modnet_preview_label = QLabel()
+        v.addWidget(self.modnet_preview_label)
+        self.modnet_image = QLabel()
+        self.modnet_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.modnet_image)
+        if self.modnet_error:
+            self.modnet_warning = QLabel(self.modnet_error)
+            self.modnet_warning.setWordWrap(True)
+            v.addWidget(self.modnet_warning)
+        if self.modnet_opted_in:
             self.birefnet_box = QCheckBox()
             self.birefnet_box.setEnabled(
                 self.birefnet_factory is not None and self.modnet_factory is not None
@@ -1516,7 +1519,7 @@ class MainWindow(QMainWindow):
         self.modnet_valid_after_ms = max(self.modnet_valid_after_ms, int(time.monotonic() * 1000))
         self.modnet_last = None
         self.modnet_runtime_error = None
-        self.shoot.setEnabled(not on)
+        self.shoot.setEnabled(False)
         if not on and self.modnet_preview_failed and self.modnet_box is not None:
             self.modnet_box.setEnabled(False)
         self.modnet_image.clear()
@@ -1712,6 +1715,10 @@ class MainWindow(QMainWindow):
 
     def retranslate(self):
         L = self.lang
+        if not self.modnet_opted_in:
+            self.modnet_error = t("modnet_enable_hint", L)
+            self.birefnet_error = self.modnet_error
+            self.modnet_warning.setText(self.modnet_error)
         self.setWindowTitle(t("title", L))
         self.title.setText(t("title", L))
         self.lang_btn.setText(t("language", L))
@@ -1845,7 +1852,7 @@ class MainWindow(QMainWindow):
         self.update_view()
         self.shoot.setEnabled(
             not self.settings.modnet_demo
-            or (not self.modnet_preview_failed and self.modnet_last is not None
+            or (self.settings.modnet_demo and not self.modnet_preview_failed and self.modnet_last is not None
                 and self.modnet_last.get("subject_status", "ready") == "ready"))
         self.strength_value.setText(f"{self.strength_slider.value()}%")
 

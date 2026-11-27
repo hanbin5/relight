@@ -27,16 +27,41 @@ def test_clothing_switch_updates_settings_and_language():
     window.open_timer.stop()
     assert window.clothing_box.isChecked()
     assert window.settings.clothing_enabled
+    assert not window.settings.modnet_demo
+    assert not window.modnet_box.isEnabled()
+    assert "--presentation-modnet" in window.modnet_box.toolTip()
     window.clothing_box.click()
     assert not window.settings.clothing_enabled
     assert "Main" in window.clothing_box.text()
     window.toggle_language()
     assert not window.clothing_box.isChecked()
     assert "Main" in window.clothing_box.text()
+    assert "Enable with --presentation-modnet" in window.modnet_warning.text()
     window.clothing_box.click()
     assert window.settings.clothing_enabled
     window.close()
     app.processEvents()
+
+
+def test_missing_opt_in_model_disables_choice_with_reason(monkeypatch):
+    from idphoto import presentation_modnet
+
+    def missing_model(*_args):
+        raise FileNotFoundError("local model missing")
+
+    monkeypatch.setattr(presentation_modnet, "check_availability", missing_model)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow("demo", "en", (640, 480), presentation_modnet=True)
+    window.open_timer.stop()
+    try:
+        assert not window.settings.modnet_demo
+        assert not window.modnet_box.isEnabled()
+        assert "local model missing" in window.modnet_warning.text()
+        window.modnet_box.click()
+        assert not window.settings.modnet_demo
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_manual_capture_is_joined_to_the_first_source_read_after_its_click(monkeypatch):
@@ -460,6 +485,7 @@ def test_frozen_manual_birefnet_frame_a_survives_live_track_change_to_b(
     b_track_break_seen = {"value": False}
     capture_started = threading.Event()
     release_capture = threading.Event()
+    auto_on_manual_frame = threading.Event()
     frozen = {}
     manual = {}
 
@@ -512,12 +538,21 @@ def test_frozen_manual_birefnet_frame_a_survives_live_track_change_to_b(
     original_process = original_pipeline.process
     original_finalize = original_pipeline.finalize_deferred_model
     original_manual = gui.Worker.request_manual_capture
+    original_take_frame_request = gui.Worker._take_frame_request
 
     def request_manual(worker):
         original_manual(worker)
         manual["timestamp_ms"] = worker.shutter_request
 
     monkeypatch.setattr(gui.Worker, "request_manual_capture", request_manual)
+
+    def take_frame_request(worker, timestamp_ms):
+        request = original_take_frame_request(worker, timestamp_ms)
+        if request[3]:
+            manual["frame_timestamp_ms"] = timestamp_ms
+        return request
+
+    monkeypatch.setattr(gui.Worker, "_take_frame_request", take_frame_request)
 
     def create_pipeline(*args, **kwargs):
         pipeline = original_pipeline(*args, **kwargs)
@@ -538,9 +573,9 @@ def test_frozen_manual_birefnet_frame_a_survives_live_track_change_to_b(
         if outcome == "manual-and-auto":
             def finalize(ctx, settings):
                 result, fired = original_finalize(pipeline, ctx, settings)
-                if manual.get("timestamp_ms") is not None \
-                        and ctx.timestamp_ms > manual["timestamp_ms"]:
+                if ctx.timestamp_ms == manual.get("frame_timestamp_ms"):
                     fired = True
+                    auto_on_manual_frame.set()
                 return result, fired
             pipeline.finalize_deferred_model = finalize
         return pipeline
@@ -619,6 +654,8 @@ def test_frozen_manual_birefnet_frame_a_survives_live_track_change_to_b(
         assert starting_epoch == 0
         window.take_photo()
         wait_for(capture_started.is_set)
+        if outcome == "manual-and-auto":
+            assert auto_on_manual_frame.is_set()
         assert np.array_equal(frozen["frame"], rgb_a)
         assert frozen["subject_index"] == 0
         np.testing.assert_array_equal(frozen["subject_faces"][0], lm)
@@ -635,6 +672,8 @@ def test_frozen_manual_birefnet_frame_a_survives_live_track_change_to_b(
             np.testing.assert_array_equal(displayed[0][0]["ctx"].raw_frame, rgb_a)
             assert displayed[0][0]["ctx"].timestamp_ms == frozen["timestamp_ms"]
             assert displayed[0][1]["automatic"] is False
+            assert displayed[0][1]["timestamp_ms"] == frozen["timestamp_ms"]
+            assert displayed[0][1]["capture_worker_input"]["timestamp_ms"] == frozen["timestamp_ms"]
             assert "changed" not in abstained
             assert not failures
         elif outcome == "settings-change":
