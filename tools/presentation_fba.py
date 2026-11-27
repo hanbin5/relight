@@ -36,7 +36,10 @@ class PresentationFBA:
         if background is not None:
             foreground = color.srgb_to_linear(prediction[..., 1:4])
             if ctx.ratio_map is not None:
-                foreground = np.minimum(foreground * ctx.ratio_map[..., None], 1)
+                gain = ctx.ratio_map[..., None]
+                if getattr(ctx, "color_gain", None) is not None:
+                    gain = gain * ctx.color_gain
+                foreground = np.minimum(foreground * gain, 1)
             a = ctx.alpha[..., None]
             ctx.output_frame = a * foreground + (1 - a) * background
         else:

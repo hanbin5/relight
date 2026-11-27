@@ -30,7 +30,9 @@ TARGET_AMBIENT = 2.0  # soft fill added to the target's key light (relative to t
 # plan's 0.8 shaded the jaw line darker, a larger fill is closer to a studio's wide softbox
 MIRROR_SMOOTH_RADIUS = 6  # left-right correction compares skin brightness averaged by two box
 # passes of this radius (at FIT_SIZE) at each point and at its mirror point
-MIRROR_PASSES = 3  # passes of the left-right correction
+MIRROR_PASSES = 2  # passes of the left-right correction
+MIRROR_COLOR = 1.0  # share of the left-right color evening (0 = brightness only)
+COLOR_GAIN_CLIP = (0.8, 1.25)  # soft bounds of each channel's color gain
 MIRROR_MIN_SKIN = 0.3  # ... over skin pixels brighter than this x the median (bangs are not skin)
 FIT_RIDGE = 1e-3  # small ridge on the l = 2 terms keeps the 9-term fit stable
 FIT_Y_RANGE = (0.004, 0.92)  # skin pixels outside this linear range count as clipped
