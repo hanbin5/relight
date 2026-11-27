@@ -41,8 +41,15 @@ STRINGS = {
     "fba_capturing": {"en": "Rendering FBA capture…", "ko": "FBA 촬영 결과 처리 중…"},
     "fba_clothing_preview": {"en": "Clothing · live preview", "ko": "Clothing · 실시간 미리보기"},
     "fba_error": {"en": "FBA error: {err}", "ko": "FBA 오류: {err}"},
-    "modnet_demo": {"en": "MODNet alpha (pretrained comparison; off = traditional)",
-                    "ko": "MODNet 알파 (사전학습 비교; 끄면 전통 방식)"},
+    "fba_unavailable": {
+        "en": "FBA unavailable: {err}\nStarted in traditional Clothing mode. From a source checkout, "
+              "for local noncommercial use, review the authors' terms, then run: uv sync --extra fba --group dev; "
+              "uv run --extra fba python tools/fba_reference.py --accept-noncommercial",
+        "ko": "FBA를 사용할 수 없습니다: {err}\n전통 Clothing으로 시작했습니다. 소스 저장소에서 로컬 비상업 사용 조건을 확인한 후 "
+              "실행: uv sync --extra fba --group dev; "
+              "uv run --extra fba python tools/fba_reference.py --accept-noncommercial"},
+    "modnet_demo": {"en": "MODNet alpha (pretrained comparison)",
+                    "ko": "MODNet 알파 (사전학습 비교)"},
     "modnet_enable_hint": {
         "en": "Enable with --presentation-modnet and a local model and dependencies.",
         "ko": "--presentation-modnet 옵션과 로컬 모델·선택 의존성이 필요합니다."},

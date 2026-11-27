@@ -1,6 +1,6 @@
 # ID Photo: webcam ID photos with live relighting
 
-For the optional noncommercial FBA and clothing experiments, see [the Korean report](README_kr.md) and [the English experiment report](CLOTHING_EXPERIMENTS.md).
+For the noncommercial FBA and clothing experiments, see [the Korean report](README_kr.md) and [the English experiment report](CLOTHING_EXPERIMENTS.md).
 
 A Python desktop app that turns a webcam session into résumé (3 × 4 cm), student or employee ID (3.5 × 4.5 cm) and square profile photos, plus 6 × 4 in print sheets. Every frame is relit to an even light from the face mesh, the background is replaced, and seven checks run before the shutter. The plan, formulas and thresholds are in [docs/id-photo-survey-plan-v2.md](docs/id-photo-survey-plan-v2.md).
 
@@ -8,7 +8,7 @@ The photos are edited (relit, background replaced), so the app is **not for pass
 
 ## Module B: traditional alpha and comparison
 
-The default Main/Clothing alpha is our traditional wall-colour, face-prior and guided-filter approach, not a trained segmentation model. The pretrained MediaPipe face landmarks support both approaches. The panel offers pretrained MODNet alpha as an opt-in comparison; without `--presentation-modnet` and its local dependencies and model, that choice is disabled. Clothing remains a switch within the traditional approach; optional FBA and BiRefNet retain their separate requirements below.
+The app starts with **FBA + Clothing** when its optional dependencies and verified local research assets are available. Clothing uses our traditional wall-colour, face-prior and guided-filter approach to produce an automatic trimap for the pretrained FBA model. Uncheck FBA for traditional Clothing alone, or also uncheck Clothing for Main. Pretrained MediaPipe face landmarks support these approaches. The panel also offers pretrained MODNet as an opt-in comparison; without `--presentation-modnet` and its local dependencies and model, that choice is disabled. BiRefNet retains its separate capture-only requirements below.
 
 If the mode or capture settings change while a traditional photo is rendering, the old result is discarded rather than displayed under the new selection.
 
@@ -21,18 +21,29 @@ In a local 12-photo experiment, the traditional alpha and output pixels using an
 Requires [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned in `.python-version`.
 
 ```bash
-uv sync
+uv sync --group dev
 ```
 
 ```bash
 uv run python tools/fetch_model.py
 ```
 
-The second command downloads MediaPipe's face landmark model (3.6 MB) to `models/` if it isn't there yet. Then start the app:
+The second command downloads MediaPipe's face landmark model (3.6 MB) to `models/` if it isn't there yet. FBA is not installed with the basic dependencies. Its public weights are **noncommercial only** per the [authors' terms](https://github.com/MarcoForte/FBA_Matting). After reviewing those terms yourself, prepare the optional dependencies and local research assets from this source checkout:
+
+```bash
+uv sync --extra fba --group dev
+uv run --extra fba python tools/fba_reference.py --accept-noncommercial
+```
+
+The app never downloads FBA assets or accepts the terms for you. Then start it without an extra flag:
 
 ```bash
 uv run idphoto
 ```
+
+With the prepared assets, FBA + Clothing is selected automatically. If dependencies, the source adapter or verified assets are missing, the app displays the reason and preparation commands and clearly selects traditional Clothing instead. The FBA adapter and preparation script are available in the source checkout, not the installed wheel. Ordinary `uv run` retains an already installed extra; a later plain `uv sync` removes extras unless requested again. `--presentation-fba` remains accepted for compatibility. To use Apple GPU for FBA, add `--fba-device mps`; an unavailable MPS device is reported rather than silently replaced with CPU.
+
+FBA is not a real-time video model here: the main view shows the latest completed FBA snapshot, while Clothing continues live and is shown while the first snapshot is pending or no face is found. The checker and auto shutter use Clothing; capture runs FBA on the frozen photo. FBA errors are shown explicitly. See the [Korean report](README_kr.md) for details.
 
 Other ways to run it:
 
@@ -60,7 +71,7 @@ On macOS, the first start asks for camera access on behalf of the app you launch
 |---|---|---|---|
 | Camera, exposure and white-balance lock, lock check | A | [capture.py](idphoto/capture.py) | B.2 |
 | sRGB → linear, luminance | A | [color.py](idphoto/color.py) | B.2 |
-| 478 face landmarks (the only pretrained part) | C | [landmarks.py](idphoto/landmarks.py) | A.3 |
+| 478 pretrained face landmarks | C | [landmarks.py](idphoto/landmarks.py) | A.3 |
 | Mesh normals, 9-term SH light fit, ratio relighting, 5-frame average | A | [relight.py](idphoto/relight.py), [mesh.py](idphoto/mesh.py) | B.2 |
 | Background and person color models, score, Otsu, opening/closing, guided filter, spill removal, compositing | B | [matting.py](idphoto/matting.py) | B.3 |
 | Crown, pose, crop and scale, print sheet, 300 DPI files | C | [geometry.py](idphoto/geometry.py) | B.5 |
@@ -68,7 +79,7 @@ On macOS, the first start asks for camera access on behalf of the app you launch
 | Glue, settings, shutter render | all | [pipeline.py](idphoto/pipeline.py) | 2.2 |
 | GUI (Korean/English) | C | [gui.py](idphoto/gui.py), [i18n.py](idphoto/i18n.py) | Fig. 4 |
 
-All modules exchange one [`FrameContext`](idphoto/context.py) (B.6). Image processing is NumPy only ([npimg.py](idphoto/npimg.py): box filters from cumulative sums, guided filter, Laplacian, Otsu, morphology, separable bicubic resampling, polygon fill, triangle rasterizer). OpenCV is used only to open the camera and to read and write image files.
+All modules exchange one [`FrameContext`](idphoto/context.py) (B.6). The traditional image processing uses NumPy ([npimg.py](idphoto/npimg.py): box filters from cumulative sums, guided filter, Laplacian, Otsu, morphology, separable bicubic resampling, polygon fill, triangle rasterizer). FBA additionally uses its pretrained model and Torch. OpenCV is used to open the camera and to read and write image files.
 
 Every starting value from B.2–B.5 is in [config.py](idphoto/config.py), so tuning in weeks 2–5 happens in one file.
 
@@ -86,7 +97,7 @@ The app does not intentionally upload photos or video. However, MediaPipe 1.2.0 
 
 ## Optional local matting experiments
 
-The default app still uses its existing NumPy matting. The experimental MODNet path is opt-in; on Apple Silicon, install the parsing extra and provide a local MODNet ONNX model to try the fixed-grid CoreML provider. BiRefNet is a separate, optional **shutter-only CPU** path: MODNet remains the live preview, and selecting BiRefNet never replaces or silently falls back to another capture model. The expected portrait model SHA-256 is `1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99`; weights are not included or downloaded automatically.
+The experimental MODNet path is opt-in; on Apple Silicon, install the parsing extra and provide a local MODNet ONNX model to try the fixed-grid CoreML provider. BiRefNet is a separate, optional **shutter-only CPU** path: MODNet remains the live preview, and selecting BiRefNet never replaces or silently falls back to another capture model. The expected portrait model SHA-256 is `1ba1c8ff5a7bbfadc8d8d13fb11d7be793f91f23d9d466549e37a854f6668f99`; weights are not included or downloaded automatically.
 
 ```bash
 uv sync --extra parsing --group dev

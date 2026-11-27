@@ -1036,7 +1036,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, source, lang: str, camera_size, presentation_fba=False, fba_device="cpu",
                  presentation_modnet=False, modnet_model="models/modnet.onnx",
-                 modnet_provider="cpu", birefnet_model=None, face_model=None):
+                 modnet_provider="cpu", birefnet_model=None, face_model=None, start_fba=False):
         super().__init__()
         self.lang = lang
         self.settings = Settings()
@@ -1077,6 +1077,8 @@ class MainWindow(QMainWindow):
                     self.fba_factory = functools.partial(PresentationFBA, device=fba_device)
             except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
                 self.fba_error = str(exc)
+        if start_fba and self.fba_factory is not None:
+            self.settings.fba_demo = True
         if presentation_modnet:
             try:
                 from .presentation_modnet import PresentationMODNet, check_availability
@@ -1265,6 +1267,7 @@ class MainWindow(QMainWindow):
         if self.presentation_fba:
             self.fba_box = QCheckBox()
             self.fba_box.setEnabled(self.fba_factory is not None)
+            self.fba_box.setChecked(self.settings.fba_demo)
             self.fba_box.toggled.connect(self.set_fba)
             v.addWidget(self.fba_box)
             self.fba_status = QLabel()
@@ -1276,7 +1279,7 @@ class MainWindow(QMainWindow):
             self.fba_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
             v.addWidget(self.fba_image)
             if self.fba_error:
-                self.fba_warning = QLabel(self.fba_error)
+                self.fba_warning = QLabel(t("fba_unavailable", self.lang, err=self.fba_error))
                 self.fba_warning.setWordWrap(True)
                 v.addWidget(self.fba_warning)
         self.modnet_box = None
@@ -1751,6 +1754,8 @@ class MainWindow(QMainWindow):
         if self.fba_box is not None:
             self.fba_box.setText(t("fba_demo", L))
             self.fba_box.setToolTip(self.fba_error or t("fba_demo_tip", L))
+            if self.fba_error:
+                self.fba_warning.setText(t("fba_unavailable", L, err=self.fba_error))
             self.fba_preview_label.setText(t("fba_clothing_preview", L))
             self.fba_preview_label.setVisible(self.settings.fba_demo)
             self.fba_image.setVisible(self.settings.fba_demo)
@@ -2023,7 +2028,7 @@ def main(argv=None):
     parser.add_argument("--face-model", default=None,
                         help="local MediaPipe face_landmarker.task path; required outside a source checkout")
     parser.add_argument("--presentation-fba", action="store_true",
-                        help="enable optional local noncommercial FBA presentation demo")
+                        help="compatibility flag; prepared FBA is already selected by default")
     parser.add_argument("--fba-device", choices=("cpu", "mps"), default="cpu",
                         help="FBA presentation inference device (default: cpu; mps: Apple GPU)")
     parser.add_argument("--presentation-modnet", action="store_true",
@@ -2037,8 +2042,6 @@ def main(argv=None):
     parser.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)  # save a window screenshot and quit
     parser.add_argument("--snapshot-after", type=float, default=6.0, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.fba_device != "cpu" and not args.presentation_fba:
-        parser.error("--fba-device mps requires --presentation-fba")
     if args.modnet_provider != "cpu" and not args.presentation_modnet:
         parser.error("--modnet-provider requires --presentation-modnet")
     if args.birefnet_model and not args.presentation_modnet:
@@ -2047,7 +2050,7 @@ def main(argv=None):
     app = QApplication(sys.argv[:1])
     lang = args.lang or ("ko" if QApplication.instance() and _system_is_korean() else "en")
     size = tuple(int(x) for x in args.camera_size.lower().split("x"))
-    window = MainWindow(args.source, lang, size, presentation_fba=args.presentation_fba,
+    window = MainWindow(args.source, lang, size, presentation_fba=True, start_fba=True,
                         fba_device=args.fba_device, presentation_modnet=args.presentation_modnet,
                         modnet_model=args.modnet_model, modnet_provider=args.modnet_provider,
                         birefnet_model=args.birefnet_model, face_model=args.face_model)

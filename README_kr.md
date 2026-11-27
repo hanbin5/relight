@@ -6,7 +6,7 @@
 
 ## 전통 alpha와 사전학습 비교
 
-기본 Main/Clothing alpha는 직접 설계한 벽 색 모델·얼굴 위치 prior·guided filter 방식입니다. 두 방식 모두 얼굴 랜드마크에 사전학습 MediaPipe를 사용합니다. 패널의 MODNet은 사전학습 모델 비교용이며 `--presentation-modnet`과 로컬 모델·선택 의존성을 준비하지 않으면 비활성화됩니다. Clothing은 전통 방식 내부의 선택이고, FBA와 BiRefNet은 아래의 별도 옵트인 조건을 유지합니다.
+앱은 선택 의존성과 검증된 로컬 연구 자산이 준비되면 **FBA + Clothing**으로 시작합니다. 직접 설계한 벽 색 모델·얼굴 위치 prior·guided filter 방식의 Clothing alpha로 자동 트라이맵을 만들고 사전학습 FBA에 입력합니다. FBA를 끄면 전통 Clothing만, 옷 영역 개선까지 끄면 Main을 선택합니다. 얼굴 랜드마크에는 사전학습 MediaPipe를 사용합니다. MODNet은 사전학습 비교용이며 `--presentation-modnet`과 로컬 모델·선택 의존성을 준비하지 않으면 비활성화됩니다. BiRefNet은 아래의 별도 촬영 조건을 유지합니다.
 
 전통 사진을 처리하는 동안 방식이나 촬영 설정이 바뀌면 이전 결과는 새 선택 아래 표시하지 않고 폐기합니다.
 
@@ -18,30 +18,30 @@
 
 기존 배경 분리 과정이 익숙하지 않다면 먼저 [Module B 배경 분리 설명](https://github.com/hanbin5/relight/blob/module-b/matting/README_kr.md)을 읽어 주세요. 이 문서는 기존 과정을 반복하지 않고, 빠진 옷을 복원하기 위해 시도한 방법과 그 결과를 설명합니다. 변경은 오프라인 실험에만 머물지 않고 앱의 `idphoto/matting.py`에 적용되어 있습니다.
 
-여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 앱은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP·Sapiens는 오프라인 실험이며 FBA는 아래의 비상업 발표용 옵트인 데모에서도 사용할 수 있습니다. Sapiens와 FBA에는 비상업 제한이 있습니다.
+여기서 **사람 prior**는 얼굴 랜드마크로 사람이 있을 만한 위치를 가정한 것이고, **gate**는 그 위치를 제한하는 영역입니다. **색 표본 후보**는 색 모델을 만들 때 뽑을 수 있는 픽셀이며, **alpha**는 0이면 배경, 1이면 인물, 그 사이면 두 색이 섞이는 정도입니다. 전통 Clothing은 옷을 의미적으로 인식하는 분할 모델을 쓰지 않습니다. SCHP·Sapiens는 오프라인 실험이며 FBA는 아래의 로컬 비상업 경로에서 사용합니다. Sapiens와 FBA에는 비상업 제한이 있습니다.
 
 ## 앱에서 Main / Clothing 비교
 
 `uv sync --group dev`와 `uv run python tools/fetch_model.py`로 환경과 얼굴 랜드마크 모델을 준비한 뒤 `uv run idphoto --lang ko`를 실행하면 카메라 화면이 열립니다. 카메라 허용이 필요하며 로컬에서만 처리합니다. 카메라 없이 확인하려면 `uv run idphoto --source demo --lang ko`, 정지 사진은 `uv run idphoto --source 사진경로 --lang ko`를 사용합니다.
 
-오른쪽 **배경 분리 비교 → 옷 영역 개선**을 켜면 기존 Clothing 방식(기본값), 끄면 옷 추가 판정 없는 Main 방식입니다. 전환 시 색 모델을 초기화하고 자동 촬영 통과 프레임을 다시 셉니다. 촬영 결과에도 선택한 방식이 적용되며, 배경 점검 실패 시 기존 규칙대로 원래 벽을 유지합니다.
+오른쪽 **배경 분리 비교 → FBA + Clothing**을 끄고 **옷 영역 개선**을 켜면 전통 Clothing 단독, 둘 다 끄면 옷 추가 판정 없는 Main입니다. 전환 시 색 모델을 초기화하고 자동 촬영 통과 프레임을 다시 셉니다. 촬영 결과에도 선택한 방식이 적용되며, 배경 점검 실패 시 기존 규칙대로 원래 벽을 유지합니다.
 
 ### FBA 수업 발표용 로컬 데모
 
-FBA 코드는 MIT이지만 공개 가중치는 [저자 안내](https://github.com/MarcoForte/FBA_Matting)에 따라 **비상업적 사용만 가능**합니다. 아래 모드는 수업 발표 등 로컬 비상업 데모만을 위한 옵트인 기능이며 제품 기본값이나 가중치 배포 기능이 아닙니다. 기본 앱에는 Torch를 추가하지 않습니다. 저자의 조건을 확인한 뒤 저장소에서:
+FBA 코드는 MIT이지만 공개 가중치는 [저자 안내](https://github.com/MarcoForte/FBA_Matting)에 따라 **비상업적 사용만 가능**합니다. 이 경로는 수업 발표 등 로컬 비상업 사용을 위한 것이며 기본 설치에는 Torch나 가중치를 포함하지 않습니다. 앱은 가중치를 자동 다운로드하거나 사용자를 대신해 조건에 동의하지 않습니다. 저자의 조건을 직접 확인한 뒤 소스 저장소에서:
 
 ```bash
 uv sync --extra fba --group dev
 uv run --extra fba python tools/fba_reference.py --accept-noncommercial
-uv run --extra fba idphoto --presentation-fba --lang ko
+uv run idphoto --lang ko
 # Apple GPU 사용 시 (지원되는 Mac에서만):
-uv run --extra fba idphoto --presentation-fba --fba-device mps --lang ko
+uv run idphoto --fba-device mps --lang ko
 # 카메라 대신 사진: --source docs/evaluation/test/shot5.jpg
 ```
 
-카메라 권한은 사용자가 직접 허용해야 합니다. `--presentation-fba`를 넣어야 **FBA + Clothing (비상업 발표 전용)**이 보이며 기본은 꺼져 있습니다. 선택하면 같은 프레임에서 Clothing alpha의 자동 트라이맵으로 FBA를 실행하고, FBA 전경색을 선형광으로 변환해 조명 비율을 적용한 뒤 합성합니다. Main은 옷 개선을 끈 상태, Clothing은 옷 개선만 켠 상태입니다. FBA 옵션은 Clothing이 켜져 있을 때만 선택할 수 있습니다. FBA 전경과 alpha는 기존 NumPy 합성과 달라 색상이 일치하지 않을 수 있습니다.
+카메라 권한은 사용자가 직접 허용해야 합니다. 준비된 환경에서는 추가 플래그나 클릭 없이 **FBA + Clothing (비상업 발표 전용)**이 선택됩니다. 기존 `--presentation-fba`도 호환성을 위해 허용합니다. 같은 프레임에서 Clothing alpha의 자동 트라이맵으로 FBA를 실행하고, FBA 전경색을 선형광으로 변환해 조명 비율을 적용한 뒤 합성합니다. FBA 옵션은 Clothing이 켜져 있을 때만 선택할 수 있습니다. FBA 전경과 alpha는 기존 NumPy 합성과 달라 색상이 일치하지 않을 수 있습니다.
 
-선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유가 표시됩니다. 가중치 검사에 실패하면 다른 결과로 조용히 대체하지 않습니다. 앱은 영상과 사진을 의도적으로 업로드하지 않습니다. 다만 로컬 실행 중 MediaPipe 1.2.0이 Google 로그 주소로 실패한 요청을 남겼고 요청 내용은 확인하지 못했습니다. 네트워크 격리 없이는 완전한 오프라인 동작을 보증할 수 없습니다.
+선택 의존성이나 검증된 로컬 소스·가중치가 없으면 FBA 선택이 비활성화되고 이유·준비 명령과 **전통 Clothing이 선택된 상태**가 명시됩니다. FBA 어댑터와 준비 스크립트는 wheel에 없으므로 소스 저장소에서 실행해야 합니다. 일반 `uv run`은 설치된 extra를 유지하지만, 이후 extra 없이 `uv sync`하면 제거되므로 다시 지정해야 합니다. 가중치 검사에 실패하면 FBA라고 표시하거나 조용히 대체하지 않습니다. 앱은 영상과 사진을 의도적으로 업로드하지 않습니다. 다만 로컬 실행 중 MediaPipe 1.2.0이 Google 로그 주소로 실패한 요청을 남겼고 요청 내용은 확인하지 못했습니다. 네트워크 격리 없이는 완전한 오프라인 동작을 보증할 수 없습니다.
 
 **FBA는 실시간 영상이 아닙니다.** 기존에는 카메라 획득과 Qt UI는 별도였지만 처리 Worker가 매 프레임 FBA를 기다려 미리보기 갱신이 느려졌습니다. FBA 선택 시 큰 카메라 화면은 마지막으로 완료된 **FBA 스냅샷**과 그 프레임의 경과 시간을 보여 주며, 옆에 Clothing 실시간 미리보기가 따로 표시됩니다. 첫 스냅샷을 기다리거나 얼굴을 찾지 못할 때 큰 화면도 Clothing을 표시합니다. FBA 작업은 동시에 하나만 실행하며 대기 미리보기는 최신 한 장으로 교체합니다. 이전 프레임의 alpha를 새로운 영상에 덧씌우지 않습니다. 촬영 요청은 대기 미리보기보다 우선하고 촬영 시점의 프레임과 설정으로 전체 해상도 FBA를 별도 실행하므로 시간이 더 걸릴 수 있습니다. 촬영 중 상태가 표시되며 중복 촬영은 허용하지 않습니다.
 

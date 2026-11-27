@@ -1023,19 +1023,45 @@ def test_deferred_modnet_does_not_capture_stale_result(monkeypatch, scenario):
         app.processEvents()
 
 
-def test_presentation_fba_is_opt_in_and_disables_when_unavailable(monkeypatch):
+def test_default_fba_disables_with_explicit_reason_when_unavailable(monkeypatch):
     from tools import presentation_fba
 
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(presentation_fba, "check_availability",
                         lambda: (_ for _ in ()).throw(FileNotFoundError("missing research weights")))
-    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True)
+    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True, start_fba=True)
     window.open_timer.stop()
-    assert not window.fba_box.isEnabled()
-    assert not window.settings.fba_demo
-    assert "missing research weights" in window.fba_warning.text()
-    window.close()
-    app.processEvents()
+    window.settings.auto_shutter = False
+    captured = []
+    monkeypatch.setattr(window, "on_captured", captured.append)
+    window.open_source()
+    try:
+        assert not window.fba_box.isEnabled()
+        assert not window.settings.fba_demo
+        assert window.settings.clothing_enabled
+        assert "missing research weights" in window.fba_warning.text()
+        assert "전통 Clothing으로 시작" in window.fba_warning.text()
+        assert "--accept-noncommercial" in window.fba_warning.text()
+        assert not window.worker.settings.fba_demo
+        deadline = time.monotonic() + 15
+        while (window.live_info is None or not window.shoot.isEnabled()) and time.monotonic() < deadline:
+            time.sleep(.02)
+            app.processEvents()
+        assert window.live_info is not None and window.shoot.isEnabled()
+        window.take_photo()
+        deadline = time.monotonic() + 15
+        while not captured and time.monotonic() < deadline:
+            time.sleep(.02)
+            app.processEvents()
+        assert captured and not captured[0]["report"]["settings"]["fba_demo"]
+        assert captured[0]["report"]["settings"]["clothing_enabled"]
+        window.toggle_language()
+        assert "Started in traditional Clothing mode" in window.fba_warning.text()
+        window.clothing_box.click()
+        assert not window.settings.clothing_enabled
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_unavailable_mps_disables_fba_without_silent_cpu_fallback(monkeypatch):
@@ -1067,6 +1093,57 @@ def test_presentation_fba_requires_clothing_and_starts_off(monkeypatch):
     app.processEvents()
 
 
+def test_cli_selects_prepared_fba_on_startup(monkeypatch):
+    import idphoto.gui as gui
+
+    calls = {}
+
+    class App:
+        def installEventFilter(self, _keys):
+            pass
+
+        def exec(self):
+            return 0
+
+    class Window:
+        def __init__(self, *args, **kwargs):
+            calls["args"] = args
+            calls["kwargs"] = kwargs
+
+        def show(self):
+            pass
+
+    monkeypatch.setattr(gui, "QApplication", lambda *_args: App())
+    monkeypatch.setattr(gui, "MainWindow", Window)
+    monkeypatch.setattr(gui, "KeyFilter", lambda _window: None)
+    assert gui.main(["--source", "demo", "--lang", "en"]) == 0
+    assert calls["kwargs"]["presentation_fba"]
+    assert calls["kwargs"]["start_fba"]
+    assert calls["kwargs"]["fba_device"] == "cpu"
+
+
+def test_prepared_default_can_switch_to_traditional_and_back(monkeypatch):
+    from tools import presentation_fba
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(presentation_fba, "check_availability", lambda: None)
+    window = MainWindow("demo", "en", (640, 480), presentation_fba=True, start_fba=True)
+    window.open_timer.stop()
+    try:
+        assert window.fba_box.isChecked()
+        assert window.settings.fba_demo and window.settings.clothing_enabled
+        window.fba_box.click()
+        assert not window.settings.fba_demo and window.settings.clothing_enabled
+        window.fba_box.click()
+        assert window.settings.fba_demo
+        window.clothing_box.click()
+        assert not window.settings.fba_demo and not window.settings.clothing_enabled
+        assert not window.fba_box.isEnabled()
+    finally:
+        window.close()
+        app.processEvents()
+
+
 @pytest.mark.parametrize("device", ["cpu", "mps"])
 def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch, device):
     torch = pytest.importorskip("torch")
@@ -1094,15 +1171,18 @@ def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch, device)
 
     monkeypatch.setattr(gui, "open_source", lambda *_: FixedDemo())
     called = threading.Event()
+    inferred_contexts = []
     original = PresentationFBA.__call__
 
     def observe(self, ctx, background):
         original(self, ctx, background)
         assert np.isfinite(ctx.alpha).all()
+        inferred_contexts.append(ctx)
         called.set()
 
     monkeypatch.setattr(PresentationFBA, "__call__", observe)
-    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True, fba_device=device)
+    window = MainWindow("demo", "ko", (640, 480), presentation_fba=True,
+                        fba_device=device, start_fba=True)
     window.open_timer.stop()
     window.settings.strength = 0
     window.settings.auto_shutter = False
@@ -1110,8 +1190,8 @@ def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch, device)
     monkeypatch.setattr(window, "on_captured", captured.append)
     window.open_source()
     try:
-        assert window.fba_box.isEnabled()
-        window.fba_box.click()
+        assert window.fba_box.isEnabled() and window.fba_box.isChecked()
+        assert window.worker.settings.fba_demo and window.worker.settings.clothing_enabled
         deadline = time.monotonic() + 30
         while (not called.is_set() or not window.view.info or not window.view.info.get("fba_display")) \
                 and window.worker.isRunning() and time.monotonic() < deadline:
@@ -1126,6 +1206,7 @@ def test_real_fba_demo_runs_in_gui_worker_when_assets_exist(monkeypatch, device)
             time.sleep(.02)
             app.processEvents()
         assert captured and captured[0]["report"]["settings"]["fba_demo"]
+        assert any(ctx is captured[0]["ctx"] for ctx in inferred_contexts)
         assert np.isfinite(captured[0]["ctx"].alpha).all()
     finally:
         window.close()
