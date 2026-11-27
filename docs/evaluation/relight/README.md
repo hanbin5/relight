@@ -1,6 +1,6 @@
 # Relighting before and after
 
-The [comparison image](before-after.png) takes one frame from a screen recording of the
+The [comparison image](before-after.png) ([Korean version](before-after-ko.png)) takes one frame from a screen recording of the
 app under a side light, with relighting off, and relights it at 100% with `main`
 (`e0f193a`) and with `relight-improvement`. Only the face is cropped.
 
