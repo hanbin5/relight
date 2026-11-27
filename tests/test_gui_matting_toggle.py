@@ -148,6 +148,68 @@ def test_switch_changes_actual_worker_matting(monkeypatch):
         app.processEvents()
 
 
+def test_traditional_capture_is_discarded_after_switch_to_modnet(monkeypatch):
+    from idphoto import gui, presentation_modnet
+
+    app = QApplication.instance() or QApplication([])
+    rgb, lm, _, _ = clothing_scene("jacket")
+    started = threading.Event()
+    release = threading.Event()
+    failures = []
+    displayed = []
+
+    class FixedDemo(DemoSource):
+        def __init__(self):
+            self.name = "fixed demo"
+            self.lock_state = "locked"
+
+        def read(self):
+            time.sleep(.025)
+            return rgb, lm
+
+    original_render = gui.Pipeline.render_final
+
+    def blocked_render(self, *args):
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("capture was not released")
+        return original_render(self, *args)
+
+    monkeypatch.setattr(gui, "open_source", lambda *_: FixedDemo())
+    monkeypatch.setattr(gui.Pipeline, "render_final", blocked_render)
+    monkeypatch.setattr(presentation_modnet, "check_availability", lambda *_: "local")
+    monkeypatch.setattr(presentation_modnet, "PresentationMODNet", lambda *_a, **_kw: None)
+    window = MainWindow("demo", "en", (640, 480), presentation_modnet=True)
+    window.open_timer.stop()
+    window.settings.auto_shutter = False
+    monkeypatch.setattr(window, "on_model_failed", failures.append)
+    window.capture_displayed.connect(lambda result, guard: displayed.append((result, guard)))
+    window.show()
+    window.open_source()
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 5
+        while not predicate() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        assert predicate()
+
+    try:
+        wait_for(lambda: window.live_info is not None and window.shoot.isEnabled())
+        window.take_photo()
+        wait_for(started.is_set)
+        window.modnet_box.click()
+        release.set()
+        wait_for(lambda: any("settings changed" in error[-1] for error in failures)
+                 or displayed)
+        assert not displayed
+        assert any("settings changed" in error[-1] for error in failures)
+    finally:
+        release.set()
+        window.close()
+        app.processEvents()
+
+
 def test_modnet_worker_paints_fresh_results_and_reruns_full_capture(monkeypatch):
     from idphoto import presentation_modnet
 

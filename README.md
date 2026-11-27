@@ -10,6 +10,8 @@ The photos are edited (relit, background replaced), so the app is **not for pass
 
 The default Main/Clothing alpha is our traditional wall-colour, face-prior and guided-filter approach, not a trained segmentation model. The pretrained MediaPipe face landmarks support both approaches. The panel offers pretrained MODNet alpha as an opt-in comparison; without `--presentation-modnet` and its local dependencies and model, that choice is disabled. Clothing remains a switch within the traditional approach; optional FBA and BiRefNet retain their separate requirements below.
 
+If the mode or capture settings change while a traditional photo is rendering, the old result is discarded rather than displayed under the new selection.
+
 Traditional mode keeps its original single-face detector and does **not** guarantee selection of the person nearest the centre or removal of other people. MODNet uses the guarded centre-face selection described below, but can also miss faces or fail to separate overlapping people.
 
 In a local 12-photo experiment, the traditional alpha and output pixels using an experimental centre detector matched the original single-face path. That detector and its multi-face abstention are not enabled in traditional mode. The photographs have no ground-truth masks and do not establish accuracy.

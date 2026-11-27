@@ -762,7 +762,18 @@ class Worker(QThread):
                                                 f"{model} capture is already in progress"))
                 else:
                     try:
-                        self.captured.emit(pipeline.render_final(frame, ctx, settings))
+                        result = pipeline.render_final(frame, ctx, settings)
+                        result["_capture_display_guard"] = {
+                            "generation": generation,
+                            "auto_generation": auto_generation,
+                            "automatic": bool(fired and not manual_capture_requested),
+                            "track_epoch": track_epoch["value"],
+                            "settings": _copy_settings(settings),
+                            "model": "fba" if settings.fba_demo else "traditional",
+                            "frame_id": seq,
+                            "timestamp_ms": ts,
+                        }
+                        self.captured.emit(result)
                     except Exception as exc:  # keep the live view running
                         self.failed.emit(f"capture failed: {exc}")
             now = time.perf_counter()
@@ -1648,6 +1659,10 @@ class MainWindow(QMainWindow):
             self.update_birefnet_status()
         elif model == "modnet":
             self.on_modnet_failed((capture, generation, message))
+        elif model == "traditional":
+            if self.worker:
+                self.worker.rearm_request = True
+            self._show_message(message)
         else:
             self.on_fba_failed((capture, generation, message))
 
