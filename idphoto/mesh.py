@@ -36,6 +36,8 @@ BROW_L = (300, 293, 334, 296, 336, 285, 295, 282, 283, 276)
 LIPS = (61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39,
         40, 185)
 # Cheek polygons sit below the lower orbital rim so glasses frames stay outside them.
+# The underside of the nose with its tip: the nostrils are dark under any light.
+NOSE_BASE = (48, 64, 98, 97, 2, 326, 327, 294, 278, 275, 4, 45)
 CHEEK_R = (123, 50, 36, 205, 187, 147)  # appears on the image left
 CHEEK_L = (352, 280, 266, 425, 411, 376)  # appears on the image right
 
@@ -151,6 +153,7 @@ def region_masks(g: np.ndarray, shape) -> dict:
         "oval": polygon(g, FACE_OVAL, shape),
         "eyes": eyes,
         "features": npimg.dilate(eyes | brows | lips, 1),
+        "nose_base": npimg.dilate(polygon(g, NOSE_BASE, shape), 2),
         "cheek_r": polygon(g, CHEEK_R, shape),
         "cheek_l": polygon(g, CHEEK_L, shape),
     }
