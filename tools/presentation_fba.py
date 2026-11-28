@@ -8,6 +8,8 @@ from idphoto import color
 from tools.eval_clothing import fba_trimap
 from tools.fba_reference import FBAReference, verify_assets
 
+NO_KNOWN_REGION = "Trimap needs both known foreground and known background."
+
 
 def check_availability(device="cpu"):
     if importlib.util.find_spec("torch") is None:
@@ -30,7 +32,15 @@ class PresentationFBA:
     def __call__(self, ctx, background):
         if ctx.landmarks is None or ctx.face_mask is None or not ctx.face_mask.any():
             return
-        trimap = fba_trimap(ctx.raw_frame, ctx.landmarks, ctx)
+        try:
+            trimap = fba_trimap(ctx.raw_frame, ctx.landmarks, ctx)
+        except ValueError as exc:
+            if not str(exc).startswith(NO_KNOWN_REGION):
+                raise
+            # The subject fills the frame (close to the camera), so no pixel is a sure
+            # background. FBA cannot run on this frame; keep the main matte instead of failing.
+            ctx.stats["fba"] = {"skipped": "no_known_background"}
+            return
         prediction, _ = self.model.process(ctx.raw_frame, trimap, tile_size=768, overlap=96)
         ctx.alpha = prediction[..., 0]
         if background is not None:
