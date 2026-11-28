@@ -21,7 +21,9 @@ FIT_SIZE = 128  # light is fitted on a FIT_SIZE x FIT_SIZE face crop
 SMOOTH_FRAMES = 5  # fitted light is averaged over the last 5 frames
 SMOOTH_FRAMES_FALLBACK = 10  # C.4 fallback when the exposure lock is not available
 KEEP_FIT_FRAMES = 15  # keep the last good fit this long when the face is lost
-RATIO_CLIP = (0.5, 2.0)  # soft bounds of the left-right part of the ratio (plan: hard clip of
+RATIO_CLIP = (0.4, 3.5)  # soft bounds of the left-right part of the ratio (was 0.5-2.0: a real side light
+# of R_LR 0.40 needs about 1.6x on the dark side at MIRROR_LIFT 0.5, past that soft bound's knee,
+# and stopped at 0.90; MIRROR_LIFT 0.75 needs about 2x; plan: hard clip of
 # target / fitted; it left flat patches where the nose's cast shadow hit the bound)
 SHAPE_RATIO_CLIP = (0.8, 1.25)  # soft bounds of the target / even-light part alone
 RATIO_SMOOTH_RADIUS = 6  # the ratio is a low-frequency field: box radius at FIT_SIZE, run twice
@@ -30,6 +32,9 @@ TARGET_AMBIENT = 2.0  # soft fill added to the target's key light (relative to t
 # plan's 0.8 shaded the jaw line darker, a larger fill is closer to a studio's wide softbox
 MIRROR_SMOOTH_RADIUS = 6  # left-right correction compares skin brightness averaged by two box
 # passes of this radius (at FIT_SIZE) at each point and at its mirror point
+MIRROR_LIFT = 0.75  # left-right evening meets at B^k D^(1-k) of the brighter and darker side:
+# 0.5 = their geometric mean (the bright side darkened as much as the dark side rose, and the face
+# looked darker), 1 = a fill light (stopped at R_LR 0.84 on a harsh side light, with more noise)
 MIRROR_PASSES = 2  # passes of the left-right correction
 MIRROR_COLOR = 1.0  # share of the left-right color evening (0 = brightness only)
 COLOR_GAIN_CLIP = (0.8, 1.25)  # soft bounds of each channel's color gain
