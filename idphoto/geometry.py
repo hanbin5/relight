@@ -32,14 +32,17 @@ class PhotoFormat:
     sheet_grid: tuple | None  # (columns, rows) on the 6 x 4 in landscape print sheet
 
 
-# head_share is the plan's default (A.1). Résumé and ID formats have no official head size, so
-# the head with its hair is 75% of the height (30 mm on the 40 mm résumé photo) and 50% on the
-# profile photo. top_margin (10%, 15%) is our choice: room above the hair without a gap, which
-# leaves the chin at 85% (65% on the profile). Both are to be tuned in the user test.
+# head_share is the plan's default (A.1) for résumé and ID: they have no official head size, so
+# the head with its hair is 75% of the height (30 mm on the 40 mm résumé photo). The profile photo
+# uses 80%, not the plan's 50%: at 50% its crop ran about a head length below the chin, past the
+# bottom of a webcam frame, and the missing rows were filled by stretching the clothes' last row.
+# top_margin (10%) is our choice: room above the hair without a gap, which leaves the chin at 85%
+# (90% on the profile).
+# Both are to be tuned in the user test.
 FORMATS = {
     "resume": PhotoFormat("resume", (30, 40), (354, 472), 0.75, 0.10, (5, 2)),
     "id": PhotoFormat("id", (35, 45), (413, 531), 0.75, 0.10, (4, 2)),
-    "profile": PhotoFormat("profile", None, (800, 800), 0.50, 0.15, None),
+    "profile": PhotoFormat("profile", None, (800, 800), 0.80, 0.10, None),
 }
 
 NOTICE = ("Edited photo (relit, background replaced). Not for passports or other government "
