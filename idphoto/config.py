@@ -21,9 +21,20 @@ FIT_SIZE = 128  # light is fitted on a FIT_SIZE x FIT_SIZE face crop
 SMOOTH_FRAMES = 5  # fitted light is averaged over the last 5 frames
 SMOOTH_FRAMES_FALLBACK = 10  # C.4 fallback when the exposure lock is not available
 KEEP_FIT_FRAMES = 15  # keep the last good fit this long when the face is lost
-RATIO_CLIP = (0.5, 2.0)  # clip of target / fitted shading
+RATIO_CLIP = (0.5, 2.0)  # soft bounds of the left-right part of the ratio (plan: hard clip of
+# target / fitted; it left flat patches where the nose's cast shadow hit the bound)
+SHAPE_RATIO_CLIP = (0.8, 1.25)  # soft bounds of the target / even-light part alone
+RATIO_SMOOTH_RADIUS = 6  # the ratio is a low-frequency field: box radius at FIT_SIZE, run twice
 TARGET_ELEVATION_DEG = 20.0  # target light: frontal, slightly from above
-TARGET_AMBIENT = 0.8  # soft fill added to the target's key light (relative to the key)
+TARGET_AMBIENT = 2.0  # soft fill added to the target's key light (relative to the key); the
+# plan's 0.8 shaded the jaw line darker, a larger fill is closer to a studio's wide softbox
+MIRROR_SMOOTH_RADIUS = 6  # left-right correction compares skin brightness averaged by two box
+# passes of this radius (at FIT_SIZE) at each point and at its mirror point
+MIRROR_PASSES = 2  # passes of the left-right correction
+MIRROR_COLOR = 1.0  # share of the left-right color evening (0 = brightness only)
+COLOR_GAIN_CLIP = (0.8, 1.25)  # soft bounds of each channel's color gain
+MIRROR_MIN_SUPPORT = 0.05  # a point and its mirror point need this share of skin in the window
+MIRROR_MIN_SKIN = 0.3  # ... over skin pixels brighter than this x the median (bangs are not skin)
 FIT_RIDGE = 1e-3  # small ridge on the l = 2 terms keeps the 9-term fit stable
 FIT_Y_RANGE = (0.004, 0.92)  # skin pixels outside this linear range count as clipped
 RATIO_GF_RADIUS = 4  # guided upsampling of the ratio, radius at FIT_SIZE
@@ -37,6 +48,8 @@ PLAIN_WALL_SHARE = 0.7  # rule 7 asks for a plain wall when less of the backgrou
 CLUSTER_SPREAD_FLOOR = 0.03  # smallest cluster spread, in sqrt-linear color (sensor noise)
 BG_SHADOW_SCALE = (0.5, 1.25)  # a background color this much darker/brighter is still background
 FG_SHADE_SCALE = (0.6, 1.5)  # shading varies across the person too
+CLOTHING_SHADE_SCALE = (0.8, 1.2)  # keep white fabric from also explaining a much darker wall
+CLOTHING_CROP_MIN_BG_DISTANCE = 0.9  # reject cropped-chest samples too close to the wall model
 SCORE_TAU = 1.0  # spreads of distance difference per unit of log-odds
 OUTLIER_DISTANCE = 2.5  # distances beyond this many spreads count the same (color seen by neither model)
 PRIOR_CORE = 0.88  # prior probability of the person in the skull and the neck

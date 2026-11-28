@@ -22,6 +22,10 @@ class FrameContext:
     light_coeffs: np.ndarray | None = None  # A: float32 (9,) fitted SH light, 5-frame average
     relit_frame: np.ndarray | None = None  # A: float32 (H, W, 3) linear frame, relit
     alpha: np.ndarray | None = None  # B: float32 (H, W) foreground mask in [0, 1]
+    all_person_alpha: np.ndarray | None = None  # added: foreground excluded from wall estimation
+    subject_faces: tuple = ()  # added: face meshes from this frame, in frame coordinates
+    subject_index: int | None = None  # added: chosen entry in subject_faces
+    subject_status: str | None = None  # added: pending, ready, no_face, or ambiguous
     output_frame: np.ndarray | None = None  # B: float32 (H, W, 3) relit frame on the new background
     rule_verdicts: dict | None = None  # D: rule number -> Verdict
     geometry: dict | None = None  # C: crown, chin, eye center, pose angles, crop box
@@ -32,6 +36,7 @@ class FrameContext:
     full_frame: np.ndarray | None = None
     face_box: tuple | None = None  # added (A): (x0, y0, x1, y1) square crop the normals live on
     ratio_map: np.ndarray | None = None  # added (A): float32 (H, W) relighting ratio, used by B's spill removal
+    color_gain: np.ndarray | None = None  # added (A): float32 (H, W, 3) per-channel gain on top of ratio_map
     wall_color: np.ndarray | None = None  # added (B): float32 (3,) linear wall color mu_B
     stats: dict = field(default_factory=dict)  # added: per-module measurements and timings
 

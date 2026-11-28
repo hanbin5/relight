@@ -5,10 +5,15 @@ Every frame:
 2. fit the room light with nine spherical-harmonic terms H(n) by least squares over skin
    pixels (eyes, brows, lips and clipped pixels left out):  l_hat = argmin sum (Y - l^T H(n))^2;
 3. average l_hat over the last 5 frames;
-4. scale each pixel by clip_[0.5, 2](l_t^T H(n) / (l_hat^T H(n) + eps)), where the target l_t is
-   even, frontal and slightly from above, has no left-right term and keeps the mean face
-   brightness. Outside the mesh the ratio fades to its face mean; the ratio is upsampled to
-   the frame with the guided filter, and a strength s in [0, 1] blends it toward 1.
+4. scale each pixel by a soft bound of two factors: sqrt(Ys(p') / Ys(p)), which evens each
+   point p with its mirror point p' on the other side of the face (Ys: widely averaged skin
+   brightness), and target(n) / even(l_hat^T H(n)), which turns the fitted light, made even
+   across the midline, into a soft studio light (frontal, slightly from above, wide fill)
+   with the same mean face brightness. The left-right part is measured again on the relit
+   grid and refined (MIRROR_PASSES). Per-channel gains likewise move each point's skin color
+   halfway to its mirror point's (ctx.color_gain). Outside the mesh the ratio fades to its face
+   mean; it is smoothed on the grid (light varies slowly), upsampled to the frame with the
+   guided filter, and a strength s in [0, 1] blends it toward 1.
 
 Only a smooth shading ratio changes, so skin texture and identity stay. Cast shadows (the
 nose's) are not modeled by nine SH terms; the checker flags them (rule 1).
@@ -18,7 +23,7 @@ from collections import deque
 
 import numpy as np
 
-from . import config, mesh, npimg
+from . import color, config, mesh, npimg
 from .context import FrameContext
 
 # Real SH basis constants (Ramamoorthi & Hanrahan 2001).
@@ -71,6 +76,101 @@ def target_light(elevation_deg: float = config.TARGET_ELEVATION_DEG,
     if yaw_deg == 0.0:
         coef[list(LEFT_RIGHT_TERMS)] = 0.0
     return coef.astype(np.float32)
+
+
+def mirror_normals(n: np.ndarray, yaw_deg: float) -> np.ndarray:
+    """Reflect normals through the face's midplane: the plane holding the up axis and the
+    direction the face points (yaw_deg), so a point on one cheek maps to the other cheek."""
+    y = np.radians(yaw_deg)
+    m = np.array([np.cos(y), 0.0, -np.sin(y)], np.float32)  # unit normal of the midplane
+    return n - 2.0 * (n @ m)[..., None] * m
+
+
+def soft_clip(r: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Bound a ratio to (lo, hi) smoothly in the log domain: up to half the bound (in log) it is
+    unchanged, beyond that it bends toward the bound instead of stopping at it, so no flat
+    clipped patches appear and a strong side light still gets most of its correction."""
+    t = np.log(np.maximum(r, 1e-6))
+    out = t.copy()
+    for sign, bound in ((1.0, np.log(hi)), (-1.0, -np.log(lo))):
+        knee = 0.5 * bound
+        x = sign * t
+        over = x > knee
+        out[over] = sign * (knee + knee * np.tanh((x[over] - knee) / knee))
+    return np.exp(out).astype(np.float32)
+
+
+def mirror_balance(Y: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray:
+    """Left-right correction measured from the frame: sqrt(Ys(mirror p) / Ys(p)) at each covered
+    grid pixel p, where Ys = smooth(Y) is the skin brightness averaged over a wide window and
+    sample reads a grid at the mirror points (the same points of the face, other side).
+
+    After it both points have the geometric mean of the two, so a side light is evened where
+    the face actually is darker, whatever caused it (the light, the nose's cast shadow, a
+    cheek's curvature). Nine SH terms could not follow a real side light closely: they
+    corrected the area next to the nose most and the darker outer cheek least.
+    """
+    Ys = smooth(Y)
+    gain = np.sqrt(np.maximum(sample(Ys), 1e-6) / np.maximum(Ys[cov], 1e-6)).astype(np.float32)
+    gain[~_supported(smooth, sample, cov)] = 1.0
+    return gain
+
+
+def mirror_color(rgb: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray:
+    """(N, 3) per-channel gains that move the widely averaged skin color at each covered grid
+    pixel halfway (geometric mean) to the color at its mirror point, at equal luminance.
+
+    Shadowed skin is redder than lit skin, and a highlight is paler; evening only the
+    brightness left a brightened shadow orange and a darkened highlight gray.
+    """
+    Cs = smooth(rgb)
+    q = Cs / np.maximum(color.luminance(Cs), 1e-6)[..., None]  # color at luminance 1
+    qp = q[cov]
+    target = np.sqrt(np.maximum(qp, 1e-6) * np.maximum(sample(q), 1e-6))
+    target /= np.maximum(color.luminance(target), 1e-6)[..., None]
+    gain = (target / np.maximum(qp, 1e-6)).astype(np.float32)
+    gain[~_supported(smooth, sample, cov)] = 1.0
+    return gain
+
+
+def _supported(smooth, sample, cov: np.ndarray) -> np.ndarray:
+    """(N,) True where both a covered grid pixel and its mirror point have enough skin around
+    them to compare. A face cut by the frame edge, or a cheek under hair, leaves none on one
+    side; its average is then empty, and reading it as a dark cheek drove the visible side
+    toward the lower bound. Such points are left uncorrected."""
+    s = smooth.support
+    return (s[cov] >= config.MIRROR_MIN_SUPPORT) & (sample(s) >= config.MIRROR_MIN_SUPPORT)
+
+
+def _smoother(weight: np.ndarray, radius: int):
+    """f(a): a (S, S[, C]) averaged over the weight > 0 pixels by two box passes of radius."""
+    w = weight.astype(np.float32)
+    support = npimg.box_mean(npimg.box_mean(w, radius), radius)  # share of the window that counts
+    den = np.maximum(support, 1e-6)
+
+    def smooth(a):
+        if a.ndim == 3:
+            return npimg.box_mean(npimg.box_mean(a * w[..., None], radius), radius) / den[..., None]
+        return npimg.box_mean(npimg.box_mean(a * w, radius), radius) / den
+    smooth.support = support
+    return smooth
+
+
+def _sampler(xy: np.ndarray, size: int):
+    """f(a): bilinear samples of a (size, size[, C]) at grid positions xy (N, 2), pixel centers
+    at +0.5; the taps are computed once and reused for every grid."""
+    x = np.clip(xy[:, 0] - 0.5, 0.0, size - 1.001)
+    y = np.clip(xy[:, 1] - 0.5, 0.0, size - 1.001)
+    x0, y0 = x.astype(np.int64), y.astype(np.int64)
+    fx, fy = (x - x0).astype(np.float32), (y - y0).astype(np.float32)
+    idx = np.stack([y0 * size + x0, y0 * size + x0 + 1, (y0 + 1) * size + x0, (y0 + 1) * size + x0 + 1])
+    wts = np.stack([(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy])
+
+    def sample(a):
+        flat = a.reshape(size * size, -1)
+        out = (flat[idx] * wts[..., None]).sum(axis=0)
+        return out if a.ndim == 3 else out[:, 0]
+    return sample
 
 
 def face_yaw(vertex_normals: np.ndarray) -> float:
@@ -141,7 +241,7 @@ class Relighter:
         lm = ctx.landmarks
         box = mesh.face_box(lm)
         vertex_normals = mesh.vertex_normals(lm)
-        normals, cov = mesh.mesh_normals(lm, box, S, vertex_normals)
+        normals, cov, raster = mesh.mesh_normals(lm, box, S, vertex_normals, with_raster=True)
         regions = mesh.region_masks(mesh.to_grid(lm, box, S), (S, S))
         Yc = npimg.resize(ctx.Y, S, S, kernel="linear", box=box)
         core = npimg.erode(cov, 1)
@@ -170,29 +270,77 @@ class Relighter:
                 self.yaws.append(yaw)
             target_yaw = float(np.mean(self.yaws)) if update else yaw
 
-        # Shading ratio on the face grid.
-        Hn = sh_basis(normals[cov])
-        fitted = Hn @ light
-        target = Hn @ target_light(yaw_deg=target_yaw)
+        # Shading ratio on the face grid, in two parts:
+        # - left-right: measured from the frame, each point against its mirror point;
+        # - shape: the fitted light made even across the midline, turned into the target
+        #   (frontal, slightly from above, wide fill) with the same mean brightness.
+        n_cov = normals[cov]
+        H = sh_basis(n_cov)
+        even_fit = 0.5 * (H @ light + sh_basis(mirror_normals(n_cov, target_yaw)) @ light)
         on_skin = skin[cov]
-        mean_fit = max(float(fitted[on_skin].mean()), 1e-4)
+        mean_fit = max(float(even_fit[on_skin].mean()), 1e-4)
+        target = H @ target_light(yaw_deg=target_yaw)
         target *= mean_fit / max(float(target[on_skin].mean()), 1e-6)  # keep mean brightness
-        r = np.clip(target / np.maximum(fitted, 0.02 * mean_fit), *config.RATIO_CLIP)
-        r = 1.0 + strength * (r - 1.0)
-        # Face mean of the ratio, weighted by brightness so hair, neck and shoulders keep the
-        # exposure the face keeps (an unweighted mean is pulled up by the brightened shadows).
+        r_shape = target / np.maximum(even_fit, 0.02 * mean_fit)
+        # Hair inside the face outline (bangs) is far darker than any shadowed skin.
+        bright = Yc > config.MIRROR_MIN_SKIN * float(np.median(Yc[skin]))
+        sample = _sampler(mesh.mirror_points(lm, box, S, raster), S)
+        skin_smooth = _smoother(skin & bright, config.MIRROR_SMOOTH_RADIUS)
+        face_smooth = _smoother(cov, config.RATIO_SMOOTH_RADIUS) if config.RATIO_SMOOTH_RADIUS > 0 else None
         y_skin = Yc[cov][on_skin]
-        face_mean = float((r[on_skin] * y_skin).sum() / max(float(y_skin.sum()), 1e-6))
-        grid = np.full((S, S), face_mean, np.float32)
-        grid[cov] = r
         fade = npimg.box_mean(core.astype(np.float32), 2)
-        grid = face_mean + fade * (grid - face_mean)
+        shape = soft_clip(r_shape, *config.SHAPE_RATIO_CLIP)
+
+        def to_grid(r_lr):
+            """The full-strength ratio on the grid, and its face mean.
+
+            Separate bounds: the shape part only reshapes an even light and stays gentle (its
+            largest values sit on the face rim, where the mesh normals are least reliable);
+            the left-right part may need a side light's full range. Light changes slowly over
+            a face, so the ratio is smoothed (two box passes, over the face only: averaging in
+            the face mean outside pulled the outer cheeks toward it). The face mean is
+            weighted by brightness so hair, neck and shoulders keep the exposure the face
+            keeps; outside the mesh the ratio fades to it.
+            """
+            r = shape * soft_clip(r_lr, *config.RATIO_CLIP)
+            mean = float((r[on_skin] * y_skin).sum() / max(float(y_skin.sum()), 1e-6))
+            g = np.full((S, S), mean, np.float32)
+            g[cov] = r
+            if face_smooth is not None:
+                g[cov] = face_smooth(g)[cov]
+            return mean + fade * (g - mean), mean
+
+        # Each pass measures what is still uneven in the frame relit with the complete ratio
+        # (shape, bounds and smoothing included), so the passes converge on even cheeks.
+        r_lr = np.ones(int(cov.sum()), np.float32)
+        for _ in range(config.MIRROR_PASSES):
+            grid, _ = to_grid(r_lr)
+            r_lr = r_lr * mirror_balance(Yc * grid, skin_smooth, sample, cov)
+        grid, face_mean = to_grid(r_lr)
+        # Everything after the bounds is linear in r, so the strength blends the grid itself.
+        grid = 1.0 + strength * (grid - 1.0)
+        face_mean = 1.0 + strength * (face_mean - 1.0)
+
+        # Color: each point's skin color halfway to its mirror point's, at equal luminance,
+        # smoothed and faded to no change outside the mesh like the ratio.
+        cgrid = None
+        if config.MIRROR_COLOR > 0 and strength > 0:  # at strength 0 the frame stays untouched
+            Cc = npimg.resize(ctx.linear_rgb, S, S, kernel="linear", box=box)
+            cg = mirror_color(Cc, skin_smooth, sample, cov)
+            cg = soft_clip(cg, *config.COLOR_GAIN_CLIP)
+            cg = 1.0 + config.MIRROR_COLOR * strength * (cg - 1.0)
+            cgrid = np.ones((S, S, 3), np.float32)
+            cgrid[cov] = cg
+            if face_smooth is not None:
+                cgrid = np.where(cov[..., None], face_smooth(cgrid), 1.0)
+            cgrid = 1.0 + fade[..., None] * (cgrid - 1.0)
 
         # Guided upsampling: coefficients on the grid, bilinear to the frame, a * guide + b.
         a, b = npimg.guided_filter_coeffs(np.sqrt(Yc), grid, config.RATIO_GF_RADIUS, config.RATIO_GF_EPS)
         fx0, fy0 = max(int(np.floor(box[0])), 0), max(int(np.floor(box[1])), 0)
         fx1, fy1 = min(int(np.ceil(box[2])), w), min(int(np.ceil(box[3])), h)
         ratio_map = np.full((h, w), face_mean, np.float32)
+        color_gain = None
         if fx1 > fx0 and fy1 > fy0:
             g = S / (box[2] - box[0])  # grid pixels per frame pixel
             on_grid = ((fx0 - box[0]) * g, (fy0 - box[1]) * g, (fx1 - box[0]) * g, (fy1 - box[1]) * g)
@@ -200,19 +348,26 @@ class Relighter:
             guide = np.sqrt(ctx.Y[fy0:fy1, fx0:fx1])
             lo_r, hi_r = 1.0 + strength * (np.array(config.RATIO_CLIP) - 1.0)
             ratio_map[fy0:fy1, fx0:fx1] = np.clip(ab[..., 0] * guide + ab[..., 1], lo_r, hi_r)
+            if cgrid is not None:
+                color_gain = np.ones((h, w, 3), np.float32)
+                color_gain[fy0:fy1, fx0:fx1] = npimg.resize(cgrid, fy1 - fy0, fx1 - fx0, "linear", box=on_grid)
             gy = np.clip(((np.arange(fy0, fy1) + 0.5 - box[1]) * g).astype(np.int64), 0, S - 1)
             gx = np.clip(((np.arange(fx0, fx1) + 0.5 - box[0]) * g).astype(np.int64), 0, S - 1)
             ctx.face_mask[fy0:fy1, fx0:fx1] = cov[np.ix_(gy, gx)]
 
         ctx.normals, ctx.face_box, ctx.light_coeffs = normals, box, light
-        ctx.ratio_map = ratio_map
+        ctx.ratio_map, ctx.color_gain = ratio_map, color_gain
         ctx.relit_frame = ctx.linear_rgb * ratio_map[..., None]
+        if color_gain is not None:
+            ctx.relit_frame *= color_gain
         np.minimum(ctx.relit_frame, 1.0, out=ctx.relit_frame)
 
-        relit_grid = Yc * grid
+        # Measured on what is shown: with the color gains, the relit luminance is not exactly
+        # Yc * grid (the gains are bounded and smoothed, so they keep luminance only roughly).
+        relit_grid = Yc * grid if cgrid is None else color.luminance(Cc * (grid[..., None] * cgrid))
         fitted_grid = np.zeros((S, S), np.float32)
         target_grid = np.zeros((S, S), np.float32)
-        fitted_grid[cov], target_grid[cov] = fitted, target
+        fitted_grid[cov], target_grid[cov] = H @ light, target
         ctx.stats.update(
             r_lr_before=mesh.cheek_balance(Yc, regions, skin),
             r_lr_after=mesh.cheek_balance(relit_grid, regions, skin),
