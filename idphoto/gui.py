@@ -1034,22 +1034,17 @@ class KeyFilter(QObject):
 class MainWindow(QMainWindow):
     capture_displayed = Signal(object, object)
 
-    def __init__(self, source, lang: str, camera_size, presentation_fba=False, fba_device="cpu",
-                 presentation_modnet=False, modnet_model="models/modnet.onnx",
-                 modnet_provider="cpu", birefnet_model=None, face_model=None, start_fba=False):
+    def __init__(self, source, lang: str, camera_size, fba_factory, face_model=None):
+        """fba_factory is required: the app always mats with FBA + Clothing."""
         super().__init__()
+        if fba_factory is None:
+            raise ValueError("FBA is required")
         self.lang = lang
         self.settings = Settings()
+        self.settings.clothing_enabled = True
+        self.settings.fba_demo = True
         self.settings_lock = threading.RLock()
-        self.fba_factory = None
-        self.fba_error = None
-        self.modnet_factory = None
-        self.modnet_error = None
-        self.birefnet_factory = None
-        self.birefnet_error = None
-        self.birefnet_runtime_error = None
-        self.presentation_fba = presentation_fba
-        self.modnet_opted_in = presentation_modnet
+        self.fba_factory = fba_factory
         self.face_model_path = Path(face_model).expanduser() if face_model else None
         self.model_generation = 0
         self.auto_shutter_generation = 0
@@ -1059,60 +1054,7 @@ class MainWindow(QMainWindow):
         self.live_info = None
         self.fba_runtime_error = None
         self.fba_preview_failed = False
-        self.modnet_generation = 0
-        self.modnet_last = None
-        self.modnet_valid_after_ms = -1
-        self.modnet_runtime_error = None
-        self.modnet_preview_failed = False
         self.worker = None
-        if presentation_fba:
-            try:
-                from tools.presentation_fba import PresentationFBA, check_availability
-
-                if fba_device == "cpu":
-                    check_availability()
-                    self.fba_factory = PresentationFBA
-                else:
-                    check_availability(fba_device)
-                    self.fba_factory = functools.partial(PresentationFBA, device=fba_device)
-            except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
-                self.fba_error = str(exc)
-        if start_fba and self.fba_factory is not None:
-            self.settings.fba_demo = True
-        if presentation_modnet:
-            try:
-                from .presentation_modnet import PresentationMODNet, check_availability
-
-                model_path = check_availability(modnet_model, modnet_provider)
-                self.modnet_factory = functools.partial(
-                    PresentationMODNet, model_path, provider=modnet_provider
-                )
-            except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
-                self.modnet_error = str(exc)
-            if birefnet_model:
-                try:
-                    from .presentation_birefnet import (
-                        BirefNetPortrait,
-                        check_availability,
-                    )
-
-                    model_path = check_availability(birefnet_model, verify_hash=False)
-                    self.birefnet_factory = functools.partial(BirefNetPortrait, model_path)
-                except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
-                    self.birefnet_error = str(exc)
-            else:
-                self.birefnet_error = (
-                    "Provide --birefnet-model with a verified local BiRefNet portrait ONNX file."
-                )
-            if self.birefnet_factory is not None and self.modnet_factory is None:
-                self.birefnet_factory = None
-                self.birefnet_error = (
-                    "BiRefNet portrait capture requires an available MODNet preview: "
-                    + (self.modnet_error or "MODNet is unavailable.")
-                )
-        else:
-            self.modnet_error = t("modnet_enable_hint", lang)
-            self.birefnet_error = t("modnet_enable_hint", lang)
         self.dialog = None
         self.closing = False
         self.view = LiveView()
@@ -1161,8 +1103,8 @@ class MainWindow(QMainWindow):
             return self.on_failed(str(exc))
         self.view.message = None
         self.worker = Worker(
-            source, self.settings, self.fba_factory, self.modnet_factory,
-            self.birefnet_factory, face_model_path=self.face_model_path,
+            source, self.settings, self.fba_factory,
+            face_model_path=self.face_model_path,
             settings_lock=self.settings_lock)
         self.worker.model_generation = self.model_generation
         self.worker.auto_shutter_generation = self.auto_shutter_generation
@@ -1170,10 +1112,8 @@ class MainWindow(QMainWindow):
         self.worker.frame_ready.connect(self.on_frame)
         self.worker.captured.connect(self.on_captured)
         self.worker.failed.connect(self.on_failed)
-        self.worker.model_snapshot.connect(self.on_model_snapshot)
-        self.worker.modnet_preparing.connect(self.on_modnet_preparing)
+        self.worker.model_snapshot.connect(self.on_fba_snapshot)
         self.worker.model_failed.connect(self.on_model_failed)
-        self.worker.subject_abstained.connect(self.on_subject_abstained)
         self.worker.start()
 
     def _wait_for_camera(self):
@@ -1257,64 +1197,6 @@ class MainWindow(QMainWindow):
         sw.addWidget(self.bg_name, 1)
         self.bg_buttons["white"].setChecked(True)
         v.addLayout(sw)
-
-        self.model_label = self._section(v)
-        self.clothing_box = QCheckBox()
-        self.clothing_box.setChecked(self.settings.clothing_enabled)
-        self.clothing_box.toggled.connect(self.set_clothing)
-        v.addWidget(self.clothing_box)
-        self.fba_box = None
-        if self.presentation_fba:
-            self.fba_box = QCheckBox()
-            self.fba_box.setEnabled(self.fba_factory is not None)
-            self.fba_box.setChecked(self.settings.fba_demo)
-            self.fba_box.toggled.connect(self.set_fba)
-            v.addWidget(self.fba_box)
-            self.fba_status = QLabel()
-            self.fba_status.setWordWrap(True)
-            v.addWidget(self.fba_status)
-            self.fba_preview_label = QLabel()
-            v.addWidget(self.fba_preview_label)
-            self.fba_image = QLabel()
-            self.fba_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            v.addWidget(self.fba_image)
-            if self.fba_error:
-                self.fba_warning = QLabel(t("fba_unavailable", self.lang, err=self.fba_error))
-                self.fba_warning.setWordWrap(True)
-                v.addWidget(self.fba_warning)
-        self.modnet_box = None
-        self.modnet_preview_label = None
-        self.birefnet_box = None
-        self.birefnet_status = None
-        self.modnet_box = QCheckBox()
-        self.modnet_box.setEnabled(self.modnet_factory is not None)
-        self.modnet_box.toggled.connect(self.set_modnet)
-        v.addWidget(self.modnet_box)
-        self.modnet_status = QLabel()
-        self.modnet_status.setWordWrap(True)
-        v.addWidget(self.modnet_status)
-        self.modnet_preview_label = QLabel()
-        v.addWidget(self.modnet_preview_label)
-        self.modnet_image = QLabel()
-        self.modnet_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(self.modnet_image)
-        if self.modnet_error:
-            self.modnet_warning = QLabel(self.modnet_error)
-            self.modnet_warning.setWordWrap(True)
-            v.addWidget(self.modnet_warning)
-        if self.modnet_opted_in:
-            self.birefnet_box = QCheckBox()
-            self.birefnet_box.setEnabled(
-                self.birefnet_factory is not None and self.modnet_factory is not None
-            )
-            self.birefnet_box.setToolTip(
-                self.birefnet_error or t("birefnet_capture_tip", self.lang)
-            )
-            self.birefnet_box.toggled.connect(self.set_birefnet_capture)
-            v.addWidget(self.birefnet_box)
-            self.birefnet_status = QLabel()
-            self.birefnet_status.setWordWrap(True)
-            v.addWidget(self.birefnet_status)
 
         self.strength_label = self._section(v)
         self.strength_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1424,18 +1306,12 @@ class MainWindow(QMainWindow):
 
     def _advance_model_generation(self):
         self.model_generation += 1
-        if self.settings.fba_demo:
-            self.fba_generation = self.model_generation
-        if self.settings.modnet_demo:
-            self.modnet_generation = self.model_generation
+        self.fba_generation = self.model_generation
         if self.worker:
             self.worker.model_generation = self.model_generation
 
     def _clear_active_model_snapshots(self):
-        if self.settings.fba_demo:
-            self.clear_fba_snapshot()
-        if self.settings.modnet_demo:
-            self.clear_modnet_snapshot()
+        self.clear_fba_snapshot()
 
     def set_background(self, key: str):
         with self.settings_lock:
@@ -1445,7 +1321,6 @@ class MainWindow(QMainWindow):
                 self._advance_model_generation()
         if changed:
             self.clear_fba_snapshot()
-            self.clear_modnet_snapshot()
         self.bg_name.setText(t(f"bg_{key}", self.lang))
 
     def set_strength(self, value: int):
@@ -1457,12 +1332,10 @@ class MainWindow(QMainWindow):
                 self._advance_model_generation()
         if changed:
             self.clear_fba_snapshot()
-            self.clear_modnet_snapshot()
 
     def clear_fba_snapshot(self):
         self.fba_valid_after_ms = max(self.fba_valid_after_ms, int(time.monotonic() * 1000))
         self.fba_last = None
-        self.update_fba_status()
         self.update_view()
 
     def set_auto(self, on: bool):
@@ -1475,217 +1348,18 @@ class MainWindow(QMainWindow):
                     self.worker.auto_shutter_generation = self.auto_shutter_generation
         if on and self.worker:
             self.worker.rearm_request = True
-        if changed and self.settings.modnet_demo:
-            self.clear_modnet_snapshot()
-
-    def set_clothing(self, on: bool):
-        if not on and self.fba_box is not None:
-            self.fba_box.setChecked(False)
-        with self.settings_lock:
-            changed = self.settings.clothing_enabled != on
-            self.settings.clothing_enabled = on
-            if changed and not self.settings.modnet_demo:
-                self._advance_model_generation()
-        if changed and not self.settings.modnet_demo:
-            self._clear_active_model_snapshots()
-        if self.fba_box is not None:
-            self.fba_box.setEnabled(on and self.fba_factory is not None and not self.fba_preview_failed)
-        if self.modnet_preview_label is not None:
-            label = ("modnet_output_preview" if self.settings.modnet_demo
-                     else "modnet_clothing_preview" if on else "modnet_main_preview")
-            self.modnet_preview_label.setText(t(label, self.lang))
-
-    def set_fba(self, on: bool):
-        if on and self.modnet_box is not None and self.modnet_box.isChecked():
-            self.modnet_box.setChecked(False)
-        with self.settings_lock:
-            changed = self.settings.fba_demo != on
-            self.settings.fba_demo = on
-            if changed:
-                self._advance_model_generation()
-            self.fba_generation = self.model_generation
-        self.fba_valid_after_ms = max(self.fba_valid_after_ms, int(time.monotonic() * 1000))
-        self.fba_last = None
-        self.fba_runtime_error = None
-        self.fba_image.clear()
-        self.fba_preview_label.setVisible(on)
-        self.fba_image.setVisible(on)
-        self.update_fba_status()
-        self.update_view()
-
-    def clear_modnet_snapshot(self):
-        self.modnet_valid_after_ms = max(self.modnet_valid_after_ms, int(time.monotonic() * 1000))
-        self.modnet_last = None
-        self.update_modnet_status()
-        self.update_view()
-
-    def set_modnet(self, on: bool):
-        if on and self.fba_box is not None and self.fba_box.isChecked():
-            self.fba_box.setChecked(False)
-        if not on and self.birefnet_box is not None and self.birefnet_box.isChecked():
-            self.birefnet_box.setChecked(False)
-        with self.settings_lock:
-            changed = self.settings.modnet_demo != on
-            self.settings.modnet_demo = on
-            if changed:
-                self._advance_model_generation()
-            self.modnet_generation = self.model_generation
-        self.modnet_valid_after_ms = max(self.modnet_valid_after_ms, int(time.monotonic() * 1000))
-        self.modnet_last = None
-        self.modnet_runtime_error = None
-        self.shoot.setEnabled(False)
-        if not on and self.modnet_preview_failed and self.modnet_box is not None:
-            self.modnet_box.setEnabled(False)
-        self.modnet_image.clear()
-        preview_label = ("modnet_output_preview" if on else
-                         "modnet_clothing_preview" if self.settings.clothing_enabled
-                         else "modnet_main_preview")
-        self.modnet_preview_label.setText(t(preview_label, self.lang))
-        self.modnet_preview_label.setVisible(on)
-        self.modnet_image.setVisible(on)
-        self.update_modnet_status()
-        self.update_view()
-
-    def set_birefnet_capture(self, on: bool):
-        with self.settings_lock:
-            capture_matte = "birefnet-portrait" if on else "modnet"
-            changed = self.settings.capture_matte != capture_matte
-            self.settings.capture_matte = capture_matte
-            if changed:
-                self._advance_model_generation()
-        self.birefnet_runtime_error = None
-        if changed:
-            self.clear_modnet_snapshot()
-            if self.worker:
-                self.worker.rearm_request = True
-        self.update_birefnet_status()
-        self.update_view()
-
-    def update_modnet_status(self, busy=False):
-        if self.modnet_box is None:
-            return
-        if self.modnet_runtime_error:
-            self.modnet_status.setText(t("modnet_error", self.lang, err=self.modnet_runtime_error))
-        elif not self.settings.modnet_demo:
-            self.modnet_status.setText("")
-        elif busy and self.settings.capture_matte == "modnet":
-            self.modnet_status.setText(t("modnet_capturing", self.lang))
-        elif self.modnet_last is None:
-            self.modnet_status.setText(t("modnet_waiting", self.lang))
-        else:
-            age = max(0.0, time.monotonic() - self.modnet_last["timestamp_ms"] / 1000)
-            self.modnet_status.setText(t(
-                "modnet_snapshot_age", self.lang, age=age,
-                inference_ms=self.modnet_last.get("inference_ms") or 0,
-                frame_id=self.modnet_last.get("frame_id", -1),
-                provider=self.modnet_last.get("execution_provider", "unknown")))
-
-    def update_birefnet_status(self, busy=False):
-        if self.birefnet_status is None:
-            return
-        if self.birefnet_runtime_error:
-            text = t("birefnet_capture_error", self.lang, err=self.birefnet_runtime_error)
-        elif self.birefnet_error:
-            text = t("birefnet_capture_unavailable", self.lang, err=self.birefnet_error)
-        elif self.settings.capture_matte == "birefnet-portrait" and busy:
-            text = t("birefnet_capture_busy", self.lang)
-        elif self.settings.capture_matte == "birefnet-portrait":
-            text = t("birefnet_capture_selected", self.lang)
-        else:
-            text = t("birefnet_capture_off", self.lang)
-        self.birefnet_status.setText(text)
-
-    def on_modnet_snapshot(self, snapshot):
-        if (not self.settings.modnet_demo or self.modnet_preview_failed
-                or snapshot["generation"] != self.modnet_generation
-                or snapshot.get("auto_shutter_generation") != self.auto_shutter_generation
-                or snapshot["background"] != self.settings.background
-                or snapshot["strength"] != self.settings.strength
-                or (self.live_info is not None
-                    and snapshot.get("track_epoch") is not None
-                    and snapshot["track_epoch"] != self.live_info.get("track_epoch"))
-                or snapshot["timestamp_ms"] <= self.modnet_valid_after_ms
-                or (self.modnet_last is not None
-                    and snapshot["timestamp_ms"] <= self.modnet_last["timestamp_ms"])):
-            return
-        self.modnet_last = snapshot
-        self.update_view()
-        if self.live_info is not None:
-            self.on_frame(self.live_info)
-        self.update_modnet_status()
-
-    def on_subject_abstained(self, status):
-        if not self.settings.modnet_demo:
-            return
-        self.modnet_last = None
-        if self.live_info is not None:
-            self.live_info = dict(self.live_info, subject_status=status)
-            self.on_frame(self.live_info)
-        else:
-            self.update_view()
-
-    def on_modnet_preparing(self, generation):
-        if self.settings.modnet_demo and generation == self.modnet_generation:
-            self.modnet_last = None
-            self.update_view()
-            self.update_modnet_status()
-
-    def on_modnet_failed(self, error):
-        capture, generation, message = error
-        if not capture and (not self.settings.modnet_demo or generation != self.modnet_generation):
-            return
-        self.modnet_runtime_error = ("capture: " if capture else "preview: ") + message
-        if not capture and self.modnet_box is not None:
-            self.modnet_preview_failed = True
-            self.modnet_last = None
-            self.shoot.setEnabled(False)
-            if self.worker:
-                self.worker.rearm_request = True
-            self.modnet_runtime_error = "preview: " + message
-        elif capture and self.worker:
-            self.worker.rearm_request = True
-        self.update_modnet_status()
-        self.update_view()
-
-    def on_model_snapshot(self, snapshot):
-        if snapshot.get("model") == "modnet":
-            self.on_modnet_snapshot(snapshot)
-        else:
-            self.on_fba_snapshot(snapshot)
 
     def on_model_failed(self, error):
         capture, model, generation, message = error
-        if model == "birefnet":
-            self.birefnet_runtime_error = message
-            if capture and self.worker:
-                self.worker.rearm_request = True
-            self.update_birefnet_status()
-        elif model == "modnet":
-            self.on_modnet_failed((capture, generation, message))
-        elif model == "traditional":
+        if model == "traditional":
             if self.worker:
                 self.worker.rearm_request = True
             self._show_message(message)
         else:
             self.on_fba_failed((capture, generation, message))
 
-    def update_fba_status(self, busy=False):
-        if self.fba_box is None:
-            return
-        if self.fba_runtime_error:
-            self.fba_status.setText(t("fba_error", self.lang, err=self.fba_runtime_error))
-        elif not self.settings.fba_demo:
-            self.fba_status.setText("")
-        elif busy:
-            self.fba_status.setText(t("fba_capturing", self.lang))
-        elif self.fba_last is None:
-            self.fba_status.setText(t("fba_waiting", self.lang))
-        else:
-            age = max(0.0, time.monotonic() - self.fba_last["timestamp_ms"] / 1000)
-            self.fba_status.setText(t("fba_snapshot_age", self.lang, age=age))
-
     def on_fba_snapshot(self, snapshot):
-        if (not self.settings.fba_demo or snapshot["generation"] != self.fba_generation
+        if (snapshot.get("model", "fba") != "fba" or snapshot["generation"] != self.fba_generation
                 or snapshot["background"] != self.settings.background
                 or snapshot["strength"] != self.settings.strength
                 or snapshot["timestamp_ms"] <= self.fba_valid_after_ms
@@ -1693,22 +1367,27 @@ class MainWindow(QMainWindow):
                     and snapshot["timestamp_ms"] <= self.fba_last["timestamp_ms"])):
             return
         self.fba_last = snapshot
+        if not self.fba_preview_failed:
+            self.fba_runtime_error = None
         self.update_view()
-        self.update_fba_status()
 
     def on_fba_failed(self, error):
         capture, generation, message = error
-        if not capture and (not self.settings.fba_demo or generation != self.fba_generation):
+        if not capture and generation != self.fba_generation:
             return
-        self.fba_runtime_error = ("capture: " if capture else "preview: ") + message
-        if not capture and self.fba_box is not None:
+        if capture:
+            # A failed shot: show the error and let the user take another one.
+            self.fba_runtime_error = "capture: " + message
+            if self.worker:
+                self.worker.rearm_request = True
+        else:
+            # FBA is required, so a failed preview stops photo taking instead of falling back.
             self.fba_preview_failed = True
-            self.fba_box.setChecked(False)
-            self.fba_box.setEnabled(False)
             self.fba_runtime_error = "preview: " + message
-        elif capture and self.worker:
-            self.worker.rearm_request = True
-        self.update_fba_status()
+            self.fba_last = None
+            self.auto_box.setChecked(False)
+            self.shoot.setEnabled(False)
+        self.update_view()
 
     def set_mirror(self, on: bool):
         if self.worker:
@@ -1733,10 +1412,6 @@ class MainWindow(QMainWindow):
 
     def retranslate(self):
         L = self.lang
-        if not self.modnet_opted_in:
-            self.modnet_error = t("modnet_enable_hint", L)
-            self.birefnet_error = self.modnet_error
-            self.modnet_warning.setText(self.modnet_error)
         self.setWindowTitle(t("title", L))
         self.title.setText(t("title", L))
         self.lang_btn.setText(t("language", L))
@@ -1748,34 +1423,6 @@ class MainWindow(QMainWindow):
         self.bg_name.setText(t(f"bg_{self.settings.background}", L))
         for key, b in self.bg_buttons.items():
             b.setToolTip(t(f"bg_{key}", L))
-        self.model_label.setText(t("matting_model", L))
-        self.clothing_box.setText(t("clothing_toggle", L))
-        self.clothing_box.setToolTip(t("clothing_toggle_tip", L))
-        if self.fba_box is not None:
-            self.fba_box.setText(t("fba_demo", L))
-            self.fba_box.setToolTip(self.fba_error or t("fba_demo_tip", L))
-            if self.fba_error:
-                self.fba_warning.setText(t("fba_unavailable", L, err=self.fba_error))
-            self.fba_preview_label.setText(t("fba_clothing_preview", L))
-            self.fba_preview_label.setVisible(self.settings.fba_demo)
-            self.fba_image.setVisible(self.settings.fba_demo)
-            self.update_fba_status()
-        if self.modnet_box is not None:
-            self.modnet_box.setText(t("modnet_demo", L))
-            self.modnet_box.setToolTip(self.modnet_error or t("modnet_demo_tip", L))
-            label = ("modnet_output_preview" if self.settings.modnet_demo else
-                     "modnet_clothing_preview" if self.settings.clothing_enabled
-                     else "modnet_main_preview")
-            self.modnet_preview_label.setText(t(label, L))
-            self.modnet_preview_label.setVisible(self.settings.modnet_demo)
-            self.modnet_image.setVisible(self.settings.modnet_demo)
-            self.update_modnet_status()
-        if self.birefnet_box is not None:
-            self.birefnet_box.setText(t("birefnet_capture", L))
-            self.birefnet_box.setToolTip(
-                self.birefnet_error or t("birefnet_capture_tip", L)
-            )
-            self.update_birefnet_status()
         self.strength_label.setText(t("strength", L))
         self.checks_label.setText(t("checks", L))
         self.shutter_label.setText(t("auto_shutter", L))
@@ -1794,20 +1441,7 @@ class MainWindow(QMainWindow):
         info = dict(self.live_info)
         info["format"] = self.settings.format
         info["head_pct"] = int(round(self.settings.head_share[self.settings.format] * 100))
-        snapshot = None
-        model = None
-        if self.settings.modnet_demo:
-            snapshot, model = self.modnet_last, "modnet"
-            info["modnet_guarded"] = True
-            width, height = info["size"]
-            placeholder = QImage(width, height, QImage.Format.Format_RGB888)
-            placeholder.fill(QColor(BACKGROUNDS.get(self.settings.background) or "#ffffff"))
-            info["image"] = placeholder
-            info["geometry"] = None
-            info["face"] = False
-        elif not self.view.before:
-            if self.settings.fba_demo:
-                snapshot, model = self.fba_last, "fba"
+        snapshot = None if self.view.before else self.fba_last
         if snapshot is not None:
             image = snapshot["image"]
             info["image"] = image.flipped(Qt.Orientation.Horizontal) if self.view.mirror else image
@@ -1819,61 +1453,29 @@ class MainWindow(QMainWindow):
                 geo["crop_fits"] = geometry.crop_fits(geo["crop_box"], (image.width(), image.height()))
             info["geometry"] = geo
             info["face"] = geo is not None
-            info[f"{model}_display"] = True
-            info[f"{model}_timestamp_ms"] = snapshot["timestamp_ms"]
-            if model == "modnet":
-                info["modnet_frame_id"] = snapshot["frame_id"]
-                info["subject_status"] = snapshot.get("subject_status", "ready")
-        elif ((self.settings.fba_demo or self.settings.modnet_demo) and not self.view.before):
-            info["fba_waiting" if self.settings.fba_demo else "modnet_waiting"] = True
+            info["fba_display"] = True
+            info["fba_timestamp_ms"] = snapshot["timestamp_ms"]
+        elif not self.view.before:
+            info["fba_waiting"] = True
         self.view.message = None
-        if self.settings.modnet_demo and self.modnet_preview_failed:
-            self.view.message = t("modnet_error", self.lang, err=self.modnet_runtime_error)
-        elif self.settings.modnet_demo and info.get("subject_status") in ("no_face", "ambiguous", "changed"):
-            self.view.message = t("subject_" + info["subject_status"], self.lang)
         geo = info.get("geometry")
         if geo is not None and not geo.get("crop_fits", True):
             self.view.message = t("msg_move_back", self.lang)
+        if self.fba_runtime_error:
+            self.view.message = t("fba_error", self.lang, err=self.fba_runtime_error)
         self.view.set_frame(info)
 
     def on_frame(self, info: dict):
         L = self.lang
-        if (self.settings.modnet_demo and self.modnet_last is not None
-                and self.modnet_last.get("track_epoch") is not None
-                and self.modnet_last["track_epoch"] != info.get("track_epoch")):
-            self.modnet_last = None
-        if self.settings.modnet_demo and self.modnet_last is not None:
-            info = dict(info)
-            info["verdicts"] = self.modnet_last["verdicts"]
-            info["shutter"] = self.modnet_last["shutter"]
-            info["stats"] = self.modnet_last["stats"]
         self.live_info = info
-        if self.settings.fba_demo and not info["fba_eligible"]:
+        if not info["fba_eligible"]:
             self.fba_valid_after_ms = max(self.fba_valid_after_ms, info["timestamp_ms"])
             self.fba_last = None
         if self.fba_last is not None and (self.fba_last["background"] != self.settings.background
                                          or self.fba_last["strength"] != self.settings.strength):
             self.clear_fba_snapshot()
-        if self.modnet_last is not None and (self.modnet_last["background"] != self.settings.background
-                                             or self.modnet_last["strength"] != self.settings.strength):
-            self.clear_modnet_snapshot()
-        if self.settings.fba_demo:
-            if self.view.before:
-                self.fba_image.clear()
-            else:
-                self.fba_image.setPixmap(QPixmap.fromImage(info["image"]).scaled(
-                    220, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        if self.settings.modnet_demo:
-            if self.view.before:
-                self.modnet_image.clear()
-            else:
-                self.modnet_image.setPixmap(QPixmap.fromImage(info["image"]).scaled(
-                    220, 140, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         self.update_view()
-        self.shoot.setEnabled(
-            not self.settings.modnet_demo
-            or (self.settings.modnet_demo and not self.modnet_preview_failed and self.modnet_last is not None
-                and self.modnet_last.get("subject_status", "ready") == "ready"))
+        self.shoot.setEnabled(not self.fba_preview_failed)
         self.strength_value.setText(f"{self.strength_slider.value()}%")
 
         verdicts = info.get("verdicts")
@@ -1916,10 +1518,6 @@ class MainWindow(QMainWindow):
             self.coach.setText(f"<b>{t('checks_pending', L)}</b>")
             self.coach.setProperty("ok", False)
             self.coach.setProperty("pending", True)
-        status = (self.modnet_last.get("subject_status") if self.modnet_last is not None
-                  else info.get("subject_status"))
-        if self.settings.modnet_demo and status in ("no_face", "ambiguous", "changed"):
-            self.coach.setText(f"<b>{t('subject_' + status, L)}</b>")
         self.coach.style().unpolish(self.coach)
         self.coach.style().polish(self.coach)
 
@@ -1931,13 +1529,7 @@ class MainWindow(QMainWindow):
         rlr = ""
         if st.get("r_lr_before") is not None and math.isfinite(st["r_lr_before"]):
             rlr = f" · R_LR {st['r_lr_before']:.2f} → {st['r_lr_after']:.2f}"
-        rate_label = ("Clothing " if self.settings.fba_demo
-                      else "MODNet " if self.settings.modnet_demo else "")
-        self.status.setText(f"{info['source']} · {rate_label}{info['fps']:.0f} fps{rlr}\n{t(lock_key, L)}")
-        self.update_fba_status(info.get("fba_capture_busy", False))
-        capture_busy = info.get("model_capture_busy", False)
-        self.update_modnet_status(capture_busy)
-        self.update_birefnet_status(capture_busy)
+        self.status.setText(f"{info['source']} · {info['fps']:.0f} fps{rlr}\n{t(lock_key, L)}")
 
     def on_captured(self, result: dict):
         guard = result.pop("_capture_display_guard", None)
@@ -2024,6 +1616,20 @@ QPushButton#shoot {{ background: {ACCENT}; color: white; border: none; border-ra
 """
 
 
+def load_fba(device: str = "cpu"):
+    """Return the FBA model factory, or the reason it can't run as a string."""
+    try:
+        from tools.presentation_fba import PresentationFBA, check_availability
+
+        if device == "cpu":
+            check_availability()
+            return PresentationFBA
+        check_availability(device)
+        return functools.partial(PresentationFBA, device=device)
+    except (ImportError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        return str(exc) or type(exc).__name__
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Webcam ID photo app")
     parser.add_argument("--source", default=None, help="camera index (default 0), 'demo', or an image/video file")
@@ -2032,33 +1638,21 @@ def main(argv=None):
                         help="requested camera resolution, e.g. 1920x1080")
     parser.add_argument("--face-model", default=None,
                         help="local MediaPipe face_landmarker.task path; required outside a source checkout")
-    parser.add_argument("--presentation-fba", action="store_true",
-                        help="compatibility flag; prepared FBA is already selected by default")
     parser.add_argument("--fba-device", choices=("cpu", "mps"), default="cpu",
-                        help="FBA presentation inference device (default: cpu; mps: Apple GPU)")
-    parser.add_argument("--presentation-modnet", action="store_true",
-                        help="enable the opt-in local MODNet experimental preview")
-    parser.add_argument("--modnet-model", default="models/modnet.onnx",
-                        help="local official MODNet ONNX model path (never downloaded automatically)")
-    parser.add_argument("--modnet-provider", choices=("cpu", "coreml-static"), default="cpu",
-                        help="MODNet provider; coreml-static pins the stride-aligned input grid")
-    parser.add_argument("--birefnet-model", default=None,
-                        help="optional local BiRefNet portrait ONNX for shutter captures only; never downloaded")
+                        help="FBA inference device (default: cpu; mps: Apple GPU)")
     parser.add_argument("--snapshot", default=None, help=argparse.SUPPRESS)  # save a window screenshot and quit
     parser.add_argument("--snapshot-after", type=float, default=6.0, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if args.modnet_provider != "cpu" and not args.presentation_modnet:
-        parser.error("--modnet-provider requires --presentation-modnet")
-    if args.birefnet_model and not args.presentation_modnet:
-        parser.error("--birefnet-model requires --presentation-modnet")
+
+    lang = args.lang or ("ko" if _system_is_korean() else "en")
+    fba_factory = load_fba(args.fba_device)
+    if isinstance(fba_factory, str):
+        print(t("fba_required", lang, err=fba_factory), file=sys.stderr)
+        return 1
 
     app = QApplication(sys.argv[:1])
-    lang = args.lang or ("ko" if QApplication.instance() and _system_is_korean() else "en")
     size = tuple(int(x) for x in args.camera_size.lower().split("x"))
-    window = MainWindow(args.source, lang, size, presentation_fba=True, start_fba=True,
-                        fba_device=args.fba_device, presentation_modnet=args.presentation_modnet,
-                        modnet_model=args.modnet_model, modnet_provider=args.modnet_provider,
-                        birefnet_model=args.birefnet_model, face_model=args.face_model)
+    window = MainWindow(args.source, lang, size, fba_factory, face_model=args.face_model)
     keys = KeyFilter(window)
     app.installEventFilter(keys)
     window.show()

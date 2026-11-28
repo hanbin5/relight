@@ -41,6 +41,15 @@ STRINGS = {
     "fba_capturing": {"en": "Rendering FBA capture…", "ko": "FBA 촬영 결과 처리 중…"},
     "fba_clothing_preview": {"en": "Clothing · live preview", "ko": "Clothing · 실시간 미리보기"},
     "fba_error": {"en": "FBA error: {err}", "ko": "FBA 오류: {err}"},
+    "fba_required": {
+        "en": "FBA is required but not ready: {err}\n"
+              "Review the FBA authors' noncommercial terms, then run:\n"
+              "  uv sync --extra fba\n"
+              "  uv run --extra fba python tools/fba_reference.py --accept-noncommercial",
+        "ko": "FBA가 필요하지만 준비되지 않았습니다: {err}\n"
+              "FBA 저자의 비상업 이용 조건을 확인한 뒤 실행하세요:\n"
+              "  uv sync --extra fba\n"
+              "  uv run --extra fba python tools/fba_reference.py --accept-noncommercial"},
     "fba_unavailable": {
         "en": "FBA unavailable: {err}\nStarted in traditional Clothing mode. From a source checkout, "
               "for local noncommercial use, review the authors' terms, then run: uv sync --extra fba --group dev; "
