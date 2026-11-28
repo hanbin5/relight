@@ -391,6 +391,8 @@ def composite(ctx: FrameContext, wall: np.ndarray, background) -> np.ndarray:
     band = np.flatnonzero((alpha > 0.0) & (alpha < 1.0))
     a = alpha[band][:, None]
     ratio = ctx.ratio_map.ravel()[band][:, None] if ctx.ratio_map is not None else 1.0
+    if ctx.color_gain is not None:  # the wall behind was relit with the same per-channel gain
+        ratio = ratio * ctx.color_gain.reshape(-1, 3)[band]
     behind = wall.reshape(-1, 3)[band] if wall.ndim == 3 else wall
     fg = np.clip((relit.reshape(-1, 3)[band] - (1.0 - a) * ratio * behind) / np.maximum(a, config.SPILL_ALPHA_FLOOR), 0.0, 1.0)
     flat[band] = a * fg + (1.0 - a) * bg

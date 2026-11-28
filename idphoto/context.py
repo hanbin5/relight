@@ -36,6 +36,7 @@ class FrameContext:
     full_frame: np.ndarray | None = None
     face_box: tuple | None = None  # added (A): (x0, y0, x1, y1) square crop the normals live on
     ratio_map: np.ndarray | None = None  # added (A): float32 (H, W) relighting ratio, used by B's spill removal
+    color_gain: np.ndarray | None = None  # added (A): float32 (H, W, 3) per-channel gain on top of ratio_map
     wall_color: np.ndarray | None = None  # added (B): float32 (3,) linear wall color mu_B
     stats: dict = field(default_factory=dict)  # added: per-module measurements and timings
 

@@ -102,9 +102,29 @@ def vertex_normals(lm: np.ndarray) -> np.ndarray:
     return vn.astype(np.float32)
 
 
-def mesh_normals(lm: np.ndarray, box, size: int, vn: np.ndarray | None = None):
+@lru_cache(maxsize=1)
+def mirror_pairs() -> np.ndarray:
+    """(468,) index of each vertex's mirror image across the face's midline. The canonical mesh
+    is exactly symmetric, and the mirror of every triangle is a triangle of the mesh."""
+    v = canonical_mesh()[0]
+    d = np.linalg.norm(v[:, None] - (v * np.array([-1.0, 1.0, 1.0], np.float32))[None], axis=-1)
+    return d.argmin(axis=1)
+
+
+def mirror_points(lm: np.ndarray, box, size: int, raster) -> np.ndarray:
+    """(N, 2) grid position of the mirror point of each covered grid pixel, in the order of
+    the coverage mask: the same barycentric weights in the mirrored triangle."""
+    tri_id, bary = raster
+    cov = tri_id >= 0
+    g = to_grid(lm, box, size)[:468, :2]
+    corners = g[mirror_pairs()[triangles()[tri_id[cov]]]]  # (N, 3, 2)
+    return np.einsum("pk,pkc->pc", bary[cov], corners)
+
+
+def mesh_normals(lm: np.ndarray, box, size: int, vn: np.ndarray | None = None,
+                 with_raster: bool = False):
     """Per-pixel normals (size, size, 3) on the face grid and the mesh coverage mask.
-    vn: the vertex normals, if already computed."""
+    vn: the vertex normals, if already computed. with_raster: also return (tri_id, bary)."""
     g = to_grid(lm, box, size)
     tri_id, bary = npimg.rasterize_triangles(g[:468, :2], g[:468, 2], triangles(), (size, size))
     cov = tri_id >= 0
@@ -113,6 +133,8 @@ def mesh_normals(lm: np.ndarray, box, size: int, vn: np.ndarray | None = None):
     n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
     normals = np.zeros((size, size, 3), np.float32)
     normals[cov] = n
+    if with_raster:
+        return normals, cov, (tri_id, bary)
     return normals, cov
 
 
