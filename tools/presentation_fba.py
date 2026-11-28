@@ -4,11 +4,15 @@ import importlib.util
 
 import numpy as np
 
-from idphoto import color
+from idphoto import color, config, npimg
 from tools.eval_clothing import fba_trimap
 from tools.fba_reference import FBAReference, verify_assets
 
 NO_KNOWN_REGION = "Trimap needs both known foreground and known background."
+
+# FBA runs at the live preview width. At capture resolution the unknown band of the trimap
+# is several times wider in pixels than the network can resolve, so it keeps the wall.
+FBA_WORK_WIDTH = config.LIVE_WIDTH
 
 
 def check_availability(device="cpu"):
@@ -22,12 +26,45 @@ def check_availability(device="cpu"):
     verify_assets()
 
 
+class WorkWidthFBA:
+    """Run FBA on a copy downscaled to `width` and bring the result back to full size.
+
+    Alpha is upsampled. The foreground keeps the full-resolution pixels and adds only the
+    upsampled FBA color correction (foreground minus input), so skin and hair stay sharp.
+    """
+
+    def __init__(self, model, width=FBA_WORK_WIDTH):
+        self.model = model
+        self.width = width
+
+    def process(self, rgb, trimap, tile_size=768, overlap=96):
+        h, w = trimap.shape
+        if w <= self.width:
+            return self.model.process(rgb, trimap, tile_size=tile_size, overlap=overlap)
+        sh, sw = max(1, round(h * self.width / w)), self.width
+        small_rgb = np.clip(npimg.resize(rgb.astype(np.float32), sh, sw, "linear") + 0.5,
+                            0, 255).astype(np.uint8)
+        # Nearest sampling keeps the trimap's three labels.
+        ys = np.minimum(((np.arange(sh) + 0.5) * h / sh).astype(np.int64), h - 1)
+        xs = np.minimum(((np.arange(sw) + 0.5) * w / sw).astype(np.int64), w - 1)
+        small_trimap = np.ascontiguousarray(trimap[ys][:, xs])
+        small, tiles = self.model.process(small_rgb, small_trimap, tile_size=tile_size, overlap=overlap)
+        correction = small[..., 1:4] - small_rgb.astype(np.float32) / 255
+        up = npimg.resize(np.concatenate([small[..., :1], correction], axis=2), h, w, "linear")
+        prediction = np.empty((h, w, 4), np.float32)
+        prediction[..., 0] = np.clip(up[..., 0], 0, 1)
+        prediction[..., 0][trimap == 255] = 1
+        prediction[..., 0][trimap == 0] = 0
+        prediction[..., 1:4] = np.clip(rgb.astype(np.float32) / 255 + up[..., 1:4], 0, 1)
+        return prediction, tiles
+
+
 class PresentationFBA:
     def __init__(self, device="cpu"):
         import torch
 
         torch.set_num_threads(4)
-        self.model = FBAReference(device=device)
+        self.model = WorkWidthFBA(FBAReference(device=device))
 
     def __call__(self, ctx, background):
         if ctx.landmarks is None or ctx.face_mask is None or not ctx.face_mask.any():
