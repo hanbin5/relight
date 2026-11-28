@@ -43,7 +43,7 @@ uv run idphoto
 
 With the prepared assets, FBA + Clothing is selected automatically. If dependencies, the source adapter or verified assets are missing, the app displays the reason and preparation commands and clearly selects traditional Clothing instead. The FBA adapter and preparation script are available in the source checkout, not the installed wheel. Ordinary `uv run` retains an already installed extra; a later plain `uv sync` removes extras unless requested again. `--presentation-fba` remains accepted for compatibility. To use Apple GPU for FBA, add `--fba-device mps`; an unavailable MPS device is reported rather than silently replaced with CPU.
 
-FBA is not a real-time video model here: the main view shows the latest completed FBA snapshot, while Clothing continues live and is shown while the first snapshot is pending or no face is found. The checker and auto shutter use Clothing; capture runs FBA on the frozen photo. FBA errors are shown explicitly. See the [Korean report](README_kr.md) for details.
+FBA is not a real-time video model here: the main view shows the latest completed FBA snapshot, while Clothing continues live and is shown while the first snapshot is pending or no face is found. The checker and auto shutter use Clothing; capture runs FBA on the frozen photo at the live width (640 px), upsamples its alpha and color correction, and keeps the full-resolution pixels; at camera resolution the trimap's unknown band is too wide in pixels and FBA left the wall in it. FBA errors are shown explicitly. See the [Korean report](README_kr.md) for details.
 
 Other ways to run it:
 

@@ -4,7 +4,7 @@ import pytest
 from idphoto import color
 from idphoto.pipeline import Pipeline, Settings
 from tests.test_matting_checker import clothing_scene
-from tools.presentation_fba import PresentationFBA
+from tools.presentation_fba import PresentationFBA, WorkWidthFBA
 
 
 def test_presentation_fba_is_lazy_and_requires_opt_in():
@@ -340,3 +340,42 @@ def test_presentation_fba_skips_a_frame_with_no_known_background():
     fba(ctx, np.ones(3, np.float32))
     assert ctx.stats["fba"] == {"skipped": "no_known_background"}
     np.testing.assert_array_equal(ctx.output_frame, before)
+
+
+def test_capture_fba_runs_at_the_work_width_and_keeps_full_resolution_detail():
+    rng = np.random.default_rng(0)
+    rgb = rng.integers(0, 256, (720, 1280, 3), dtype=np.uint8)
+    trimap = np.full((720, 1280), 128, np.uint8)
+    trimap[:, :200] = 0
+    trimap[300:, 500:800] = 255
+    seen = []
+
+    class Model:
+        def process(self, image, part, tile_size, overlap):
+            seen.append((image.shape, set(np.unique(part).tolist())))
+            out = np.zeros(part.shape + (7,), np.float32)
+            out[..., 0] = 0.5
+            out[..., 1:4] = image / 255  # no color correction
+            return out, 1
+
+    prediction, _ = WorkWidthFBA(Model(), width=640).process(rgb, trimap)
+    assert seen == [((360, 640, 3), {0, 128, 255})]
+    assert prediction.shape == (720, 1280, 4)
+    assert (prediction[trimap == 0, 0] == 0).all() and (prediction[trimap == 255, 0] == 1).all()
+    np.testing.assert_allclose(prediction[trimap == 128, 0], 0.5, atol=1e-5)
+    # Without a correction the foreground is the full-resolution input, not a blurred copy.
+    np.testing.assert_allclose(prediction[..., 1:4], rgb / 255, atol=0.01)
+
+
+def test_preview_sized_frames_go_to_fba_unchanged():
+    rgb = np.zeros((360, 640, 3), np.uint8)
+    trimap = np.full((360, 640), 128, np.uint8)
+    calls = []
+
+    class Model:
+        def process(self, image, part, tile_size, overlap):
+            calls.append(image is rgb and part is trimap)
+            return "result", 1
+
+    assert WorkWidthFBA(Model(), width=640).process(rgb, trimap) == ("result", 1)
+    assert calls == [True]
