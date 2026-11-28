@@ -323,3 +323,20 @@ def test_real_mps_prediction_matches_cpu_when_available():
     cpu, _ = FBAReference(device="cpu").process(rgb, trimap)
     mps, _ = FBAReference(device="mps").process(rgb, trimap)
     np.testing.assert_allclose(mps, cpu, rtol=0, atol=3e-4)
+
+
+def test_presentation_fba_skips_a_frame_with_no_known_background():
+    rgb, lm, _, _ = clothing_scene("jacket")
+    ctx, _ = Pipeline().process(rgb, Settings(auto_shutter=False), landmarks=lm)
+    ctx.alpha = np.ones_like(ctx.alpha)  # the subject fills the whole frame
+    before = ctx.output_frame.copy()
+
+    class Model:
+        def process(self, *args, **kwargs):
+            raise AssertionError("FBA must not run without a known background")
+
+    fba = PresentationFBA.__new__(PresentationFBA)
+    fba.model = Model()
+    fba(ctx, np.ones(3, np.float32))
+    assert ctx.stats["fba"] == {"skipped": "no_known_background"}
+    np.testing.assert_array_equal(ctx.output_frame, before)
