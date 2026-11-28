@@ -1903,6 +1903,11 @@ class MainWindow(QMainWindow):
             self.coach.setText(f"<b>{name}:</b> {t('msg_' + (first_fail.message or 'no_face'), L)}")
             self.coach.setProperty("ok", False)
             self.coach.setProperty("pending", False)
+        elif checks_complete and not (info.get("geometry") or {}).get("crop_fits", True):
+            # All checks pass, but the auto shutter waits until the crop fits in the frame.
+            self.coach.setText(f"<b>{t('framing', L)}:</b> {t('msg_move_back', L)}")
+            self.coach.setProperty("ok", False)
+            self.coach.setProperty("pending", False)
         elif checks_complete:
             self.coach.setText(f"<b>{t('all_pass', L)}</b>")
             self.coach.setProperty("ok", True)

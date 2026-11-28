@@ -103,9 +103,12 @@ def test_deferred_modnet_skips_unused_clothing_matting(monkeypatch):
     np.testing.assert_array_equal(ctx.output_frame, np.ones_like(ctx.output_frame))
 
 
-def test_deferred_modnet_shutter_resets_and_blocks_uncertain_tracks():
+def test_deferred_modnet_shutter_resets_and_blocks_uncertain_tracks(monkeypatch):
+    from idphoto import geometry
     from idphoto.checker import AutoShutter, Verdict
 
+    # This scene's crop runs past the frame bottom; this test is about tracking, not framing.
+    monkeypatch.setattr(geometry, "crop_fits", lambda *args, **kwargs: True)
     rgb, lm, _, _ = clothing_scene("jacket")
 
     class Check:

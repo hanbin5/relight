@@ -475,6 +475,18 @@ def test_good_frame_passes_every_rule_and_fires_the_shutter():
     assert fired and not pipeline.shutter.armed
 
 
+def test_auto_shutter_waits_while_the_crop_runs_past_the_frame():
+    """Below the frame the photo would be filled by stretching the clothes' last row."""
+    from idphoto.pipeline import Settings
+
+    settings = Settings()
+    settings.head_share[settings.format] = 0.4  # a small head: the crop runs past the frame
+    ctx, _, pipeline, fired = run_pipeline(synthetic.Scene(**SIDE), frames=8, settings=settings)
+    assert all(v.passed for v in ctx.rule_verdicts.values())
+    assert not ctx.geometry["crop_fits"]
+    assert not fired and pipeline.shutter.armed
+
+
 def test_sharpness_bound_is_calibrated_per_camera():
     from idphoto import config
     from idphoto.checker import Checker

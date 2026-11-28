@@ -156,7 +156,8 @@ class Pipeline:
                 ctx.stats.get("landmark_source") not in ("hint", "search")
                 and not ctx.stats.get("track_break", False)
             )
-            fired = self.shutter.update(all_pass and safe_tracking, enabled=settings.auto_shutter)
+            fired = self.shutter.update(all_pass and safe_tracking and _crop_fits(ctx),
+                                        enabled=settings.auto_shutter)
             t.append(time.perf_counter())
         names = ("landmarks", "relight", "matting", "geometry", "checker")
         ctx.stats["timings_ms"] = {n: 1000 * (t[i + 1] - t[i]) for i, n in enumerate(names)}
@@ -193,7 +194,8 @@ class Pipeline:
             ctx.stats.get("landmark_source") not in ("hint", "search")
             and not ctx.stats.get("track_break", False)
         )
-        fired = self.shutter.update(all_pass and safe_tracking, enabled=settings.auto_shutter)
+        fired = self.shutter.update(all_pass and safe_tracking and _crop_fits(ctx),
+                                    enabled=settings.auto_shutter)
         ctx.rule_verdicts = verdicts
         ctx.stats["all_pass"] = all_pass
         timings = ctx.stats.setdefault("timings_ms", {})
@@ -443,6 +445,12 @@ def to_live(frame: np.ndarray, landmarks=None, width: int = config.LIVE_WIDTH):
     if landmarks is not None:
         landmarks = landmarks * np.float32(small.shape[1] / w)
     return small, landmarks
+
+
+def _crop_fits(ctx: FrameContext) -> bool:
+    """The auto shutter waits while the selected format's crop runs past the frame: below it,
+    the photo would be filled by stretching the clothes' last row."""
+    return bool(ctx.geometry is not None and ctx.geometry.get("crop_fits", True))
 
 
 def _num(x):
