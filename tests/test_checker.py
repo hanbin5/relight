@@ -30,3 +30,32 @@ def test_hair_over_the_forehead_is_not_shadow():
     rgb[top:eye_top, left:right] = 20
     v = even_light_unrelit(rgb, lm)
     assert v.detail["shadow_share"] < config.SHADOW_MAX
+
+
+def head_pose(pitch_ratio, pitch_deg=None, yaw_ratio=0.0, yaw_deg=None):
+    import numpy as np
+
+    from idphoto.context import FrameContext
+
+    ctx = FrameContext(raw_frame=np.zeros((4, 4, 3), np.uint8))
+    ctx.geometry = {"roll_deg": 0.0, "yaw_ratio": yaw_ratio, "yaw_deg": yaw_deg,
+                    "pitch_ratio": pitch_ratio, "pitch_deg": pitch_deg}
+    return Checker().head_pose(ctx)
+
+
+def test_pitch_uses_degrees_when_the_detector_gives_them():
+    # a real face 10 degrees down reads ~1.4 as a ratio; the angle should decide
+    assert head_pose(1.4, pitch_deg=10.0).passed
+    assert not head_pose(1.0, pitch_deg=15.5).passed  # leaning in, like shot5
+    assert not head_pose(1.0, pitch_deg=-8.0).passed  # chin up
+
+
+def test_pitch_falls_back_to_the_ratio_without_degrees():
+    assert head_pose(1.0).passed
+    assert not head_pose(1.4).passed
+
+
+def test_yaw_uses_degrees_when_the_detector_gives_them():
+    assert head_pose(1.0, yaw_ratio=0.086, yaw_deg=3.5).passed  # test4: over the ratio bound, under 5 degrees
+    assert not head_pose(1.0, yaw_ratio=0.0, yaw_deg=-7.0).passed
+    assert not head_pose(1.0, yaw_ratio=0.086).passed  # no degrees: the ratio decides

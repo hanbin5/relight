@@ -12,8 +12,12 @@ File names don't matter (e.g. alex.jpg in every folder). For each rule, a fault 
 of that rule counts as caught if the rule fails; any other photo where the rule fails
 is a false alarm. Every measured value is also written to a CSV, for picking thresholds.
 
-Each photo is run on its own, so rule 3 uses the starting bound (120) instead of the
-per-camera one; use the sharpness values in the CSV to pick a bound for each camera.
+Rule 3 (sharpness) is calibrated per camera in the app, from that camera's recent frames.
+Here each photo is run on its own, so afterwards the photos are grouped by image size (one
+size = one camera) and each camera gets the bound the app would give it from those photos
+(70% of their 80th percentile, between SHARPNESS_FLOOR and 120).
+
+It also reports R_LR before and after relighting (plan C.1: within 0.90-1.10).
 """
 
 import argparse
@@ -21,6 +25,9 @@ import csv
 import sys
 from pathlib import Path
 
+import numpy as np
+
+from idphoto import config
 from idphoto.capture import ImageSource
 from idphoto.checker import RULES
 from idphoto.landmarks import FaceLandmarkDetector
@@ -65,6 +72,14 @@ def score(results):
     return table
 
 
+def camera_bounds(scores):
+    """{camera: [sharpness scores]} -> {camera: rule 3 bound}, as Checker.sharpness_bound
+    would set it after seeing those frames (without its 15-frame warm-up)."""
+    return {cam: min(config.SHARPNESS_MIN,
+                     max(config.SHARPNESS_FLOOR, config.SHARPNESS_REL * float(np.percentile(v, 80))))
+            for cam, v in scores.items()}
+
+
 def check_photo(path, detector, timestamp):
     frame = ImageSource(path).frame
     live, _ = to_live(frame)
@@ -88,7 +103,7 @@ def main() -> int:
 
     detector = FaceLandmarkDetector()
     timestamp = 0  # landmark detection needs increasing timestamps, across photos too
-    results, rows, no_face = [], [], []
+    results, rows, no_face, cameras = [], [], [], []
     for path, name in photos:
         ctx, timestamp = check_photo(path, detector, timestamp)
         if ctx.landmarks is None:
@@ -97,13 +112,28 @@ def main() -> int:
         verdicts = ctx.rule_verdicts
         failed = {n for n, v in verdicts.items() if not v.passed}
         results.append((name, failed))
-        row = {"photo": str(path), "fault": name}
+        frame = ctx.full_frame if ctx.full_frame is not None else ctx.raw_frame
+        cameras.append(f"{frame.shape[1]}x{frame.shape[0]}")
+        row = {"photo": str(path), "fault": name, "camera": cameras[-1],
+               "r_lr_before": round(ctx.stats["r_lr_before"], 4), "r_lr_after": round(ctx.stats["r_lr_after"], 4)}
         for n, v in verdicts.items():
             row[f"{n}_{v.key}_pass"] = int(v.passed)
             row[f"{n}_{v.key}_value"] = "" if v.value is None else round(v.value, 4)
         rows.append(row)
-        print(f"{path}: failed {sorted(failed) or '-'}")
     detector.close()
+
+    # Rule 3 with a bound per camera, as the app would calibrate it
+    sharp_key = f"3_{RULES[3]}"
+    scores = {}
+    for cam, row in zip(cameras, rows):
+        scores.setdefault(cam, []).append(row[f"{sharp_key}_value"])
+    bounds = camera_bounds(scores)
+    for (name, failed), cam, row in zip(results, cameras, rows):
+        ok = row[f"{sharp_key}_value"] >= bounds[cam]
+        row[f"{sharp_key}_pass"] = int(ok)
+        failed.discard(3) if ok else failed.add(3)
+        print(f"{row['photo']}: failed {sorted(failed) or '-'}")
+    print("\nrule 3 bound per camera: " + ", ".join(f"{c} ({len(scores[c])} photos): {b:.0f}" for c, b in bounds.items()))
 
     print(f"\n{len(results)} photos checked, {len(no_face)} with no face found")
     for path in no_face:
@@ -117,6 +147,15 @@ def main() -> int:
     good = [failed for name, failed in results if name == "good"]
     if good:
         print(f"\ngood photos passing every rule: {sum(not f for f in good)}/{len(good)}")
+
+    lo, hi = config.EVEN_LIGHT_RANGE
+    print(f"\nR_LR before -> after relighting (plan: {lo:.2f}-{hi:.2f})")
+    for name in FAULTS:
+        r = [row for row in rows if row["fault"] == name]
+        if r:
+            before = sum(lo <= x["r_lr_before"] <= hi for x in r)
+            after = sum(lo <= x["r_lr_after"] <= hi for x in r)
+            print(f"  {name:14s} in range: {before}/{len(r)} before -> {after}/{len(r)} after")
 
     if rows:
         out = Path(args.csv)

@@ -157,15 +157,35 @@ class Checker:
     # Rule 4 -------------------------------------------------------------------------
     def head_pose(self, ctx: FrameContext) -> Verdict:
         geo = ctx.geometry
-        roll, yaw, pitch = geo["roll_deg"], geo["yaw_ratio"], geo["pitch_ratio"]
+        roll, yaw, ratio = geo["roll_deg"], geo["yaw_ratio"], geo["pitch_ratio"]
         roll_ok = abs(roll) <= config.ROLL_MAX_DEG
-        lo, hi = config.PITCH_RATIO_RANGE
-        facing_ok = abs(yaw) <= config.YAW_RATIO_MAX and lo <= pitch <= hi
+        # Pitch: MediaPipe's head angle in degrees when the detector gives one (module C).
+        # The 10-1-152 ratio depends on face shape (a 10 degree tilt reads 1.30-1.44 on our
+        # real photos but ~1.13 on the canonical face), so it is only the fallback, used
+        # when there is no detector (synthetic faces, replayed landmarks).
+        pitch_deg = geo.get("pitch_deg")
+        if pitch_deg is not None:
+            lo, hi = config.PITCH_DEG_RANGE
+            pitch_ok = lo <= pitch_deg <= hi
+            pitch_bound = f"pitch {lo:+g}° to {hi:+g}°"
+        else:
+            lo, hi = config.PITCH_RATIO_RANGE
+            pitch_ok = lo <= ratio <= hi
+            pitch_bound = f"pitch ratio {lo}–{hi}"
+        yaw_deg = geo.get("yaw_deg")  # same idea for yaw: degrees when available
+        if yaw_deg is not None:
+            yaw_ok = abs(yaw_deg) <= config.YAW_DEG_MAX
+            yaw_bound = f"yaw ≤ {config.YAW_DEG_MAX:g}°"
+        else:
+            yaw_ok = abs(yaw) <= config.YAW_RATIO_MAX
+            yaw_bound = f"yaw ratio ≤ {config.YAW_RATIO_MAX}"
+        facing_ok = yaw_ok and pitch_ok
         ok = roll_ok and facing_ok
         message = None if ok else ("straighten_head" if not roll_ok else "face_camera")
         return Verdict(4, RULES[4], ok, roll,
-                       f"roll ≤ {config.ROLL_MAX_DEG}°; yaw ≤ {config.YAW_RATIO_MAX}; pitch {lo}–{hi}",
-                       message, {"roll_deg": roll, "yaw_ratio": yaw, "pitch_ratio": pitch})
+                       f"roll ≤ {config.ROLL_MAX_DEG}°; {yaw_bound}; {pitch_bound}",
+                       message, {"roll_deg": roll, "yaw_ratio": yaw, "yaw_deg": yaw_deg,
+                        "pitch_ratio": ratio, "pitch_deg": pitch_deg})
 
     # Rule 5 -------------------------------------------------------------------------
     def eyes_open(self, lm: np.ndarray) -> Verdict:

@@ -150,6 +150,11 @@ After the earlier wall timing runs, a fresh wheel was built and installed into a
 | `uv run python tools/relight_demo.py` | Reproduces Figure 3 with the real code: prints R_LR and shadow share before and after, saves `out/relight_demo.png` |
 | `uv run python tools/eval_synthetic.py` | Synthetic version of C.1: R_LR over a sweep of side lights, mask IoU against the true mask, staged faults and per-rule recall |
 | `uv run python tools/eval_checker.py testset/` | Precision and recall of each checker rule on real photos sorted into one folder per staged fault (C.1); saves every measured value to `out/checker_eval.csv` |
+| `uv run python tools/make_faults.py docs/evaluation/test/*.jpg` | Makes blurred, tilted and side-shadowed copies of good photos in `testset/`, for `eval_checker.py` |
+| `uv run python tools/make_rating_pairs.py docs/evaluation/test/*.jpg` | Relit vs unrelit résumé photos side by side as A/B in random order for the blind rating, with the answer key (`out/rating/`) |
+| `uv run python tools/score_rating.py responses.csv` | Scores the blind rating from the form's CSV export: raters preferring relit, sign test |
+| `uv run python tools/score_usability.py usability.csv` | Scores the usability test: retakes and time, our app vs the phone workflow (Wilcoxon, bootstrap) |
+| `uv run --with onnxruntime python tools/identity_check.py` | ArcFace similarity of each relit photo to its unrelit original (evaluation only; downloads a 13 MB model to `models/`) |
 | `uv run python tools/bench_fps.py` | Frames per second of the full live pipeline on this machine (target ≥ 10) |
 | `uv run python tools/process_image.py photo.jpg` | Runs the pipeline on still photos and saves the same files as the app |
 | `uv run python tools/crown_inspector.py photo.jpg` | Crown and crop checking window: both crown cues, the crop box and the saved photo, with sliders for k, the mask band and the head share. Click the top of the hair to mark the true crown; it shows the head-length error in mm and the best-fit k. `--demo` uses synthetic faces |
