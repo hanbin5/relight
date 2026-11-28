@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import pytest
 
@@ -485,6 +487,39 @@ def test_auto_shutter_waits_while_the_crop_runs_past_the_frame():
     assert all(v.passed for v in ctx.rule_verdicts.values())
     assert not ctx.geometry["crop_fits"]
     assert not fired and pipeline.shutter.armed
+
+
+def test_dark_nostrils_are_not_a_shadow_but_a_dark_cheek_is():
+    """The nostrils are dark under any light; they took 3-4% of rule 1's 5% shadow share."""
+    from idphoto import config, mesh
+    from idphoto.checker import Checker
+
+    ctx, _, _, _ = run_pipeline(synthetic.Scene(**SIDE), frames=6)
+    S = config.FIT_SIZE
+    box = ctx.face_box
+    g = mesh.to_grid(ctx.landmarks, box, S)
+    regions = mesh.region_masks(g, (S, S))
+
+    def darken(region):
+        """A copy of ctx whose relit frame is near black where region lies on the grid."""
+        h, w = ctx.size[1], ctx.size[0]
+        ys, xs = np.mgrid[0:h, 0:w]
+        gx = ((xs + 0.5 - box[0]) * S / (box[2] - box[0])).astype(int)
+        gy = ((ys + 0.5 - box[1]) * S / (box[3] - box[1])).astype(int)
+        inside = (gx >= 0) & (gx < S) & (gy >= 0) & (gy < S)
+        hit = np.zeros((h, w), bool)
+        hit[inside] = region[gy[inside], gx[inside]]
+        dark = ctx.relit_frame.copy()
+        dark[hit] *= 0.05
+        out = copy.copy(ctx)
+        out.relit_frame = dark
+        return Checker().even_light(out)
+
+    base = Checker().even_light(ctx).detail["shadow_share"]
+    nostrils = darken(npimg.erode(regions["nose_base"], 2))
+    assert nostrils.detail["shadow_share"] == pytest.approx(base, abs=0.005)
+    cheek = darken(npimg.dilate(regions["cheek_l"], 4))
+    assert cheek.detail["shadow_share"] >= 0.05 and not cheek.passed
 
 
 def test_sharpness_bound_is_calibrated_per_camera():

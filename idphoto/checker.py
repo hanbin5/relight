@@ -91,8 +91,10 @@ class Checker:
         r_lr = mesh.cheek_balance(Y, reg, skin)
         # Shadow share only below the eyes and away from the face edge: on real photos, bangs
         # and hair at the temples fall inside the face outline and were counted as shadow.
+        # The nostrils are left out too: dark under any light, they took 3-4% of the 5%.
         eye_y = g[list(mesh.EYE_R) + list(mesh.EYE_L), 1].max()
-        lower = npimg.erode(skin, config.SHADOW_EDGE_PX) & (np.arange(S)[:, None] > eye_y)
+        lower = npimg.erode(skin, config.SHADOW_EDGE_PX) & (np.arange(S)[:, None] > eye_y) \
+            & ~reg["nose_base"]
         shadow = mesh.shadow_share(Y, lower, config.SHADOW_FACTOR)
         lo, hi = config.EVEN_LIGHT_RANGE
         ok = bool(lo <= r_lr <= hi and shadow < config.SHADOW_MAX)
