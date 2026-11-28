@@ -32,6 +32,11 @@ from . import config, synthetic
 
 # Manual / auto values of CAP_PROP_AUTO_EXPOSURE per backend.
 _EXPOSURE_FLAGS = {"V4L2": (1, 3), "DSHOW": (0.25, 0.75), "MSMF": (0.25, 0.75)}
+# Windows backends: many laptop webcam drivers report placeholder exposure and white-balance
+# values while in auto mode, so locking to them left the view very dark and green, and the
+# manual setting stayed in the driver after the app quit. There we keep the camera in auto
+# (and switch auto back on when opening it); the light fit uses the 10-frame fallback.
+_NO_LOCK_BACKENDS = {"DSHOW", "MSMF"}
 
 
 def camera_permission() -> str:
@@ -132,6 +137,8 @@ class Camera(_LockingCamera):
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
         self.cap = cap
         self.backend = cap.getBackendName().upper()
+        if self.backend in _NO_LOCK_BACKENDS:
+            self._set_auto()  # undo a manual setting left in the driver by an earlier run
         self._settle = SettleDetector()
         self.name = f"camera {index} ({self.backend})"
 
@@ -147,7 +154,7 @@ class Camera(_LockingCamera):
         """Lock exposure and white balance at their settled values; returns the lock state."""
         cv2, cap = self._cv2, self.cap
         flags = _EXPOSURE_FLAGS.get(self.backend)
-        if flags is None:
+        if flags is None or self.backend in _NO_LOCK_BACKENDS:
             return lock_outcome(None, None)
         exposure = cap.get(cv2.CAP_PROP_EXPOSURE)  # read both before leaving auto mode
         temperature = cap.get(cv2.CAP_PROP_WB_TEMPERATURE)
@@ -163,6 +170,10 @@ class Camera(_LockingCamera):
         return lock_outcome(exposure_ok, wb_ok)
 
     def unlock(self):
+        self._set_auto()
+
+    def _set_auto(self):
+        """Hand exposure and white balance to the camera's automatic control."""
         flags = _EXPOSURE_FLAGS.get(self.backend)
         if flags is not None:
             self.cap.set(self._cv2.CAP_PROP_AUTO_EXPOSURE, flags[1])
