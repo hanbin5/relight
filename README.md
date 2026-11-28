@@ -8,10 +8,23 @@ The photos are edited (relit, background replaced), so the app is **not for pass
 
 ## Requirements
 
-- Python 3.12 (pinned in `.python-version`)
-- [uv](https://docs.astral.sh/uv/)
+- [uv](https://docs.astral.sh/uv/), the Python package manager. It also installs Python 3.12 (pinned in `.python-version`) if it is missing.
 - git (the FBA setup script clones the FBA source)
 - A webcam (optional: `--source demo` runs without one)
+
+To install uv on macOS or Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+On Windows (PowerShell):
+
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then open a new terminal so the `uv` command is found.
 
 ## Install
 
