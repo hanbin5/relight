@@ -54,6 +54,15 @@ FBA is too slow for live video, so the main view shows the latest finished FBA s
 
 On macOS, the first start asks for camera access for the app you launched it from (Terminal, iTerm and so on): click Allow. If no dialog appears, run it from Terminal, or allow that app in System Settings → Privacy & Security → Camera and restart it.
 
+### Visual Studio (Windows)
+
+Python has no compile step, so Visual Studio opens and runs the source as it is; **Build** succeeds without producing an executable.
+
+1. Install Visual Studio 2022 with the **Python development** workload.
+2. In this folder, run the two commands under [Install](#install). `uv sync` creates the `.venv` environment that the project uses.
+3. Open `Team11_Relight.sln`. The project's environment is `.venv (Python 3.12)` and its startup file is `main.py`.
+4. Press **F5** (or Ctrl+F5) to start the app. To run without a camera, set **Project → Properties → Debug → Script Arguments** to `--source demo`.
+
 ## Saved files
 
 **Save…** in the result window writes a folder `idphoto_YYYYmmdd_HHMMSS/` with:
@@ -66,6 +75,8 @@ On macOS, the first start asks for camera access for the app you launched it fro
 
 | File | What it does |
 |---|---|
+| `main.py` | Starts the app (Visual Studio startup file) |
+| `Team11_Relight.sln`, `Team11_Relight.pyproj` | Visual Studio solution and Python project |
 | `idphoto/capture.py` | Camera, exposure and white-balance lock |
 | `idphoto/color.py` | sRGB ↔ linear, luminance |
 | `idphoto/landmarks.py` | 478 pretrained face landmarks (MediaPipe) |

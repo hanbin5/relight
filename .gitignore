@@ -12,3 +12,6 @@ CLAUDE.local.md
 .idea/
 # macOS folder settings
 .DS_Store
+# Visual Studio per-user files
+.vs/
+*.pyproj.user
