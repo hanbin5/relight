@@ -67,6 +67,8 @@ FBA is too slow for live video, so the main view shows the latest finished FBA s
 
 On macOS, the first start asks for camera access for the app you launched it from (Terminal, iTerm and so on): click Allow. If no dialog appears, run it from Terminal, or allow that app in System Settings → Privacy & Security → Camera and restart it.
 
+On Windows, if the webcam view looks very dark or green, close this app, open the Windows **Camera** app once and close it, then start this app again. The Camera app puts the webcam back into automatic exposure and white balance.
+
 ### Visual Studio (Windows)
 
 Python has no compile step, so Visual Studio opens and runs the source as it is; **Build** succeeds without producing an executable.
