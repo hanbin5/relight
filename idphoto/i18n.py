@@ -132,6 +132,7 @@ STRINGS = {
     "msg_move_back": {"en": "you are too close, so the photo gets cut off. Move back a little",
                       "ko": "너무 가까워서 사진이 잘립니다. 조금 뒤로 물러나세요"},
     "no_face": {"en": "No face found", "ko": "얼굴이 보이지 않습니다"},
+    "framing": {"en": "Framing", "ko": "사진 틀"},
     "all_pass": {"en": "All checks pass: hold still", "ko": "모든 점검 통과: 그대로 계세요"},
     "checks_pending": {"en": "Checks not evaluated yet", "ko": "점검 결과 미판정"},
     "rule_pending": {"en": "not evaluated", "ko": "미판정"},
