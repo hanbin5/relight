@@ -284,15 +284,18 @@ def composite_dense(ctx, wall, background):
     wall_array = np.asarray(wall, np.float32)
     wall_channels = cv2.split(wall_array) if wall_array.ndim == 3 else None
     output = []
+    gain_channels = cv2.split(ctx.color_gain) if ctx.color_gain is not None else None
     for index in range(3):
+        # the wall behind was relit with the same per-channel color gain
+        sub = subtraction if gain_channels is None else cv2.multiply(subtraction, gain_channels[index])
         if wall_channels is None:
             spill = cv2.scaleAdd(
-                subtraction, -float(wall_array[index]), relit_channels[index]
+                sub, -float(wall_array[index]), relit_channels[index]
             )
         else:
             spill = cv2.subtract(
                 relit_channels[index],
-                cv2.multiply(subtraction, wall_channels[index]),
+                cv2.multiply(sub, wall_channels[index]),
             )
         foreground = cv2.multiply(cv2.min(cv2.max(spill, 0.0), denominator), scale)
         output.append(cv2.scaleAdd(inverse, float(bg[index]), foreground))

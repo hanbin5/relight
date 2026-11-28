@@ -33,6 +33,7 @@ MIRROR_SMOOTH_RADIUS = 6  # left-right correction compares skin brightness avera
 MIRROR_PASSES = 2  # passes of the left-right correction
 MIRROR_COLOR = 1.0  # share of the left-right color evening (0 = brightness only)
 COLOR_GAIN_CLIP = (0.8, 1.25)  # soft bounds of each channel's color gain
+MIRROR_MIN_SUPPORT = 0.05  # a point and its mirror point need this share of skin in the window
 MIRROR_MIN_SKIN = 0.3  # ... over skin pixels brighter than this x the median (bangs are not skin)
 FIT_RIDGE = 1e-3  # small ridge on the l = 2 terms keeps the 9-term fit stable
 FIT_Y_RANGE = (0.004, 0.92)  # skin pixels outside this linear range count as clipped

@@ -111,7 +111,9 @@ def mirror_balance(Y: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray
     corrected the area next to the nose most and the darker outer cheek least.
     """
     Ys = smooth(Y)
-    return np.sqrt(np.maximum(sample(Ys), 1e-6) / np.maximum(Ys[cov], 1e-6)).astype(np.float32)
+    gain = np.sqrt(np.maximum(sample(Ys), 1e-6) / np.maximum(Ys[cov], 1e-6)).astype(np.float32)
+    gain[~_supported(smooth, sample, cov)] = 1.0
+    return gain
 
 
 def mirror_color(rgb: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray:
@@ -126,18 +128,31 @@ def mirror_color(rgb: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray
     qp = q[cov]
     target = np.sqrt(np.maximum(qp, 1e-6) * np.maximum(sample(q), 1e-6))
     target /= np.maximum(color.luminance(target), 1e-6)[..., None]
-    return (target / np.maximum(qp, 1e-6)).astype(np.float32)
+    gain = (target / np.maximum(qp, 1e-6)).astype(np.float32)
+    gain[~_supported(smooth, sample, cov)] = 1.0
+    return gain
+
+
+def _supported(smooth, sample, cov: np.ndarray) -> np.ndarray:
+    """(N,) True where both a covered grid pixel and its mirror point have enough skin around
+    them to compare. A face cut by the frame edge, or a cheek under hair, leaves none on one
+    side; its average is then empty, and reading it as a dark cheek drove the visible side
+    toward the lower bound. Such points are left uncorrected."""
+    s = smooth.support
+    return (s[cov] >= config.MIRROR_MIN_SUPPORT) & (sample(s) >= config.MIRROR_MIN_SUPPORT)
 
 
 def _smoother(weight: np.ndarray, radius: int):
     """f(a): a (S, S[, C]) averaged over the weight > 0 pixels by two box passes of radius."""
     w = weight.astype(np.float32)
-    den = np.maximum(npimg.box_mean(npimg.box_mean(w, radius), radius), 1e-6)
+    support = npimg.box_mean(npimg.box_mean(w, radius), radius)  # share of the window that counts
+    den = np.maximum(support, 1e-6)
 
     def smooth(a):
         if a.ndim == 3:
             return npimg.box_mean(npimg.box_mean(a * w[..., None], radius), radius) / den[..., None]
         return npimg.box_mean(npimg.box_mean(a * w, radius), radius) / den
+    smooth.support = support
     return smooth
 
 
@@ -309,7 +324,7 @@ class Relighter:
         # Color: each point's skin color halfway to its mirror point's, at equal luminance,
         # smoothed and faded to no change outside the mesh like the ratio.
         cgrid = None
-        if config.MIRROR_COLOR > 0:
+        if config.MIRROR_COLOR > 0 and strength > 0:  # at strength 0 the frame stays untouched
             Cc = npimg.resize(ctx.linear_rgb, S, S, kernel="linear", box=box)
             cg = mirror_color(Cc, skin_smooth, sample, cov)
             cg = soft_clip(cg, *config.COLOR_GAIN_CLIP)
@@ -347,7 +362,9 @@ class Relighter:
             ctx.relit_frame *= color_gain
         np.minimum(ctx.relit_frame, 1.0, out=ctx.relit_frame)
 
-        relit_grid = Yc * grid
+        # Measured on what is shown: with the color gains, the relit luminance is not exactly
+        # Yc * grid (the gains are bounded and smoothed, so they keep luminance only roughly).
+        relit_grid = Yc * grid if cgrid is None else color.luminance(Cc * (grid[..., None] * cgrid))
         fitted_grid = np.zeros((S, S), np.float32)
         target_grid = np.zeros((S, S), np.float32)
         fitted_grid[cov], target_grid[cov] = H @ light, target

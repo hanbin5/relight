@@ -295,3 +295,45 @@ def test_a_face_cut_by_the_frame_edge_is_fitted_on_real_pixels_only():
     whole, cut = fit(0.5), fit(0.94)  # at 0.94 about a quarter of the face is outside
     assert abs(cut[0] - whole[0]) / whole[0] < 0.40
     assert np.abs(cut[1:4] - whole[1:4]).max() < 0.25
+
+
+def test_spill_removal_undoes_the_per_channel_relight_gain():
+    """At a partly transparent pixel the wall behind was relit with the ratio and the color
+    gain; removing the spill with both recovers the relit foreground exactly."""
+    from idphoto.context import FrameContext
+    from idphoto.matting import composite
+    rng = np.random.default_rng(3)
+    h, w = 6, 7
+    fg = rng.uniform(0.1, 0.6, (h, w, 3)).astype(np.float32)
+    wall = np.array([0.7, 0.6, 0.5], np.float32)
+    alpha = rng.uniform(0.3, 0.9, (h, w)).astype(np.float32)
+    ratio = rng.uniform(0.8, 1.2, (h, w)).astype(np.float32)
+    gain = rng.uniform(0.85, 1.15, (h, w, 3)).astype(np.float32)
+    ctx = FrameContext(raw_frame=np.zeros((h, w, 3), np.uint8))
+    ctx.alpha, ctx.ratio_map, ctx.color_gain = alpha, ratio, gain
+    total = ratio[..., None] * gain
+    ctx.relit_frame = total * (alpha[..., None] * fg + (1 - alpha[..., None]) * wall)
+    bg = np.zeros(3, np.float32)
+    out = composite(ctx, wall, bg)
+    np.testing.assert_allclose(out, alpha[..., None] * (total * fg), atol=1e-5)
+
+
+def test_a_point_whose_mirror_has_no_skin_is_left_uncorrected():
+    """A mirror point with no skin around it (face cut by the frame edge) must not read as a
+    dark cheek: the gain there stays 1 instead of dropping to the lower bound."""
+    from idphoto import relight as rl
+    S = 32
+    cov = np.ones((S, S), bool)
+    skin = np.zeros((S, S), bool)
+    skin[:, S // 2:] = True  # only the right half has skin
+    xs = (np.arange(S) + 0.5)[None, :].repeat(S, 0)
+    ys = (np.arange(S) + 0.5)[:, None].repeat(S, 1)
+    mirror = np.stack([S - xs, ys], -1)[cov]  # mirror across the vertical midline
+    smooth = rl._smoother(skin, 3)
+    sample = rl._sampler(mirror, S)
+    Y = np.full((S, S), 0.4, np.float32)
+    gain = rl.mirror_balance(Y, smooth, sample, cov).reshape(S, S)
+    assert np.all(gain[:, S - 4:] == 1.0)  # mirror of the right edge is the skinless left edge
+    rgb = np.full((S, S, 3), 0.4, np.float32)
+    cgain = rl.mirror_color(rgb, smooth, sample, cov).reshape(S, S, 3)
+    assert np.all(cgain[:, S - 4:] == 1.0)

@@ -669,7 +669,7 @@ def test_fused_wall_estimate_matches_separate_global_and_local_estimates():
 def test_modnet_dense_composite_matches_standard_spill_removal():
     rng = np.random.default_rng(12)
     for spatial_wall in (False, True):
-        for with_ratio in (False, True):
+        for with_ratio, with_color in ((False, False), (True, False), (True, True)):
             alpha = rng.random((24, 32), dtype=np.float32)
             alpha[0] = 0.0
             alpha[-1] = 1.0
@@ -678,6 +678,8 @@ def test_modnet_dense_composite_matches_standard_spill_removal():
             ctx.relit_frame = rng.random((24, 32, 3), dtype=np.float32)
             ctx.ratio_map = rng.uniform(0.65, 1.55, alpha.shape).astype(np.float32) \
                 if with_ratio else None
+            ctx.color_gain = rng.uniform(0.8, 1.25, (24, 32, 3)).astype(np.float32) \
+                if with_color else None
             wall = rng.random((24, 32, 3), dtype=np.float32) if spatial_wall \
                 else rng.random(3, dtype=np.float32)
             for background in (np.zeros(3, np.float32), np.ones(3, np.float32)):
