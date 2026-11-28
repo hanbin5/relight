@@ -3,18 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 out/
-# downloaded by tools/fetch_model.py
-models/
-# volunteer test photos (plan C.1): keep local, delete after the semester
-testset/
-# Experimental comparisons may contain identifiable people; keep them local.
-docs/evaluation/clothing/**/*.jpg
-docs/evaluation/clothing/*.jpg
-docs/evaluation/test/test9.jpg
-docs/evaluation/clothing/fba-combinations/**/*.jpg
-docs/evaluation/clothing/fba-leakage/**/*.jpg
-docs/evaluation/clothing/shape-priors/**/*.jpg
-docs/evaluation/clothing/fba-color-constraints/**/*.jpg
+# FBA assets are downloaded by tools/fba_reference.py; only the face model is kept in git
+models/*
+!models/face_landmarker.task
 # personal notes for Claude
 CLAUDE.local.md
 # PyCharm project settings (per user)
