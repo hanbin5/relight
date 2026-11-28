@@ -238,7 +238,8 @@ def test_a_face_cut_by_the_frame_edge_does_not_crash(side_lit, dx, dy):
     Relighter().process(ctx)
     assert ctx.relit_frame.shape == ctx.linear_rgb.shape
     assert np.isfinite(ctx.relit_frame).all() and np.isfinite(ctx.ratio_map).all()
-    assert ctx.ratio_map.min() >= 0.5 - 1e-4 and ctx.ratio_map.max() <= 2.0 + 1e-4
+    lo, hi = config.RATIO_CLIP
+    assert ctx.ratio_map.min() >= lo - 1e-4 and ctx.ratio_map.max() <= hi + 1e-4
 
 
 def test_a_tiny_distant_face_does_not_crash():

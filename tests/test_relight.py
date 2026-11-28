@@ -1,6 +1,6 @@
 import numpy as np
 
-from idphoto import mesh, synthetic
+from idphoto import color, mesh, npimg, synthetic
 from idphoto.relight import LEFT_RIGHT_TERMS, Relighter, fit_light, sh_basis, target_light
 
 from .conftest import FRONT, make_ctx
@@ -109,3 +109,46 @@ def test_canonical_scene_is_level():
     pose = head_pose(lm)
     assert abs(pose["roll_deg"]) < 1e-3 and abs(pose["yaw_ratio"]) < 1e-3
     assert abs(pose["pitch_ratio"] - 1.0) < 1e-3
+
+
+def test_reported_balance_is_what_the_checker_measures_on_the_relit_frame():
+    """r_lr_after includes the guided upsampling: it used to be measured on the grid before
+    it and read about 0.05 higher than rule 1 on real side-lit frames."""
+    from idphoto.checker import Checker
+
+    rgb, lm, _ = synthetic.render(synthetic.Scene(light=(-0.75, 0.2, 0.62), ambient=0.25))
+    ctx = make_ctx(rgb, lm)
+    relighter = Relighter()
+    for _ in range(5):
+        relighter.process(ctx)
+    measured = Checker().even_light(ctx).value
+    assert ctx.stats["r_lr_before"] < 0.35  # a harsh side light
+    assert abs(ctx.stats["r_lr_after"] - measured) < 0.02
+    assert 0.90 <= measured <= 1.10
+
+
+def test_lift_keeps_more_of_the_bright_side(side_lit, monkeypatch):
+    """MIRROR_LIFT 0.75 raises the dark cheek more and darkens the lit cheek less than the
+    geometric mean (0.5), so the evened face is not darker than the camera frame."""
+    from idphoto import config
+
+    rgb, lm, _ = side_lit
+    box = mesh.face_box(lm)
+    regions = mesh.region_masks(mesh.to_grid(lm, box, 128), (128, 128))
+
+    def cheeks(lift):
+        monkeypatch.setattr(config, "MIRROR_LIFT", lift)
+        ctx = make_ctx(rgb, lm)
+        relighter = Relighter()
+        for _ in range(5):
+            relighter.process(ctx)
+        Y = color.luminance(npimg.resize(ctx.relit_frame, 128, 128, "linear", box=box))
+        return ctx, [float(Y[regions[k]].mean()) for k in ("cheek_l", "cheek_r")]
+
+    _, mean = cheeks(0.5)
+    ctx, lift = cheeks(0.75)
+    assert max(lift) > max(mean) and min(lift) > min(mean)
+    assert 0.90 <= ctx.stats["r_lr_after"] <= 1.10
+    before = color.luminance(npimg.resize(ctx.linear_rgb, 128, 128, "linear", box=box))
+    face = regions["cheek_l"] | regions["cheek_r"]
+    assert np.mean(lift) >= 0.98 * float(before[face].mean())

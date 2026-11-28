@@ -5,13 +5,13 @@ Every frame:
 2. fit the room light with nine spherical-harmonic terms H(n) by least squares over skin
    pixels (eyes, brows, lips and clipped pixels left out):  l_hat = argmin sum (Y - l^T H(n))^2;
 3. average l_hat over the last 5 frames;
-4. scale each pixel by a soft bound of two factors: sqrt(Ys(p') / Ys(p)), which evens each
+4. scale each pixel by a soft bound of two factors: (Ys(p') / Ys(p))^k, which evens each
    point p with its mirror point p' on the other side of the face (Ys: widely averaged skin
-   brightness), and target(n) / even(l_hat^T H(n)), which turns the fitted light, made even
+   brightness; k = MIRROR_LIFT for the darker point, 1 - k for the brighter one), and target(n) / even(l_hat^T H(n)), which turns the fitted light, made even
    across the midline, into a soft studio light (frontal, slightly from above, wide fill)
    with the same mean face brightness. The left-right part is measured again on the relit
-   grid and refined (MIRROR_PASSES). Per-channel gains likewise move each point's skin color
-   halfway to its mirror point's (ctx.color_gain). Outside the mesh the ratio fades to its face
+   grid, after the guided upsampling below, and refined (MIRROR_PASSES). Per-channel gains likewise move each point's skin color
+   toward its mirror point's by the same shares (ctx.color_gain). Outside the mesh the ratio fades to its face
    mean; it is smoothed on the grid (light varies slowly), upsampled to the frame with the
    guided filter, and a strength s in [0, 1] blends it toward 1.
 
@@ -101,32 +101,42 @@ def soft_clip(r: np.ndarray, lo: float, hi: float) -> np.ndarray:
 
 
 def mirror_balance(Y: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray:
-    """Left-right correction measured from the frame: sqrt(Ys(mirror p) / Ys(p)) at each covered
-    grid pixel p, where Ys = smooth(Y) is the skin brightness averaged over a wide window and
-    sample reads a grid at the mirror points (the same points of the face, other side).
+    """Left-right correction measured from the frame: (Ys(mirror p) / Ys(p))^k at each covered
+    grid pixel p, where Ys = smooth(Y) is the skin brightness averaged over a wide window,
+    sample reads a grid at the mirror points (the same points of the face, other side), and
+    k = MIRROR_LIFT at the darker point of a pair, 1 - k at the brighter one.
 
-    After it both points have the geometric mean of the two, so a side light is evened where
+    After it both points have the same brightness, so a side light is evened where
     the face actually is darker, whatever caused it (the light, the nose's cast shadow, a
     cheek's curvature). Nine SH terms could not follow a real side light closely: they
     corrected the area next to the nose most and the darker outer cheek least.
     """
     Ys = smooth(Y)
-    gain = np.sqrt(np.maximum(sample(Ys), 1e-6) / np.maximum(Ys[cov], 1e-6)).astype(np.float32)
+    ratio = np.maximum(sample(Ys), 1e-6) / np.maximum(Ys[cov], 1e-6)
+    # Both points meet at B^k D^(1-k) (B, D: the brighter and darker level, k = MIRROR_LIFT):
+    # the darker point gains (B/D)^k, the brighter one (B/D)^(k-1).
+    k = config.MIRROR_LIFT
+    gain = np.where(ratio > 1.0, ratio ** k, ratio ** (1.0 - k)).astype(np.float32)
     gain[~_supported(smooth, sample, cov)] = 1.0
     return gain
 
 
 def mirror_color(rgb: np.ndarray, smooth, sample, cov: np.ndarray) -> np.ndarray:
     """(N, 3) per-channel gains that move the widely averaged skin color at each covered grid
-    pixel halfway (geometric mean) to the color at its mirror point, at equal luminance.
+    pixel toward the color at its mirror point, at equal luminance: the darker point of a pair
+    by the share MIRROR_LIFT (geometric), the brighter one by the rest, so they meet.
 
     Shadowed skin is redder than lit skin, and a highlight is paler; evening only the
     brightness left a brightened shadow orange and a darkened highlight gray.
     """
     Cs = smooth(rgb)
     q = Cs / np.maximum(color.luminance(Cs), 1e-6)[..., None]  # color at luminance 1
-    qp = q[cov]
-    target = np.sqrt(np.maximum(qp, 1e-6) * np.maximum(sample(q), 1e-6))
+    qp, qm = np.maximum(q[cov], 1e-6), np.maximum(sample(q), 1e-6)
+    # The colors meet where the brightness does: the darker point moves the share k of the way.
+    k = config.MIRROR_LIFT
+    lum = color.luminance(Cs)
+    share = np.where(lum[cov] < sample(lum), k, 1.0 - k)[:, None]
+    target = qp ** (1.0 - share) * qm ** share
     target /= np.maximum(color.luminance(target), 1e-6)[..., None]
     gain = (target / np.maximum(qp, 1e-6)).astype(np.float32)
     gain[~_supported(smooth, sample, cov)] = 1.0
@@ -310,18 +320,28 @@ class Relighter:
                 g[cov] = face_smooth(g)[cov]
             return mean + fade * (g - mean), mean
 
+        grid_guide = np.sqrt(Yc)
+
+        def upsampled(grid, bounds=config.RATIO_CLIP):
+            """The ratio the frame actually gets: the guided upsampling (a * guide + b) and the
+            frame's bounds, evaluated on the grid. The guided filter flattens the left-right
+            correction (on real side-lit frames R_LR fell from 0.93 on the grid to 0.88)."""
+            a, b = npimg.guided_filter_coeffs(grid_guide, grid, config.RATIO_GF_RADIUS, config.RATIO_GF_EPS)
+            return np.clip(a * grid_guide + b, *bounds)
+
         # Each pass measures what is still uneven in the frame relit with the complete ratio
-        # (shape, bounds and smoothing included), so the passes converge on even cheeks.
+        # (shape, bounds, smoothing and guided upsampling included), so the passes converge
+        # on even cheeks in the output, not only on the grid.
         r_lr = np.ones(int(cov.sum()), np.float32)
         for _ in range(config.MIRROR_PASSES):
             grid, _ = to_grid(r_lr)
-            r_lr = r_lr * mirror_balance(Yc * grid, skin_smooth, sample, cov)
+            r_lr = r_lr * mirror_balance(Yc * upsampled(grid), skin_smooth, sample, cov)
         grid, face_mean = to_grid(r_lr)
         # Everything after the bounds is linear in r, so the strength blends the grid itself.
         grid = 1.0 + strength * (grid - 1.0)
         face_mean = 1.0 + strength * (face_mean - 1.0)
 
-        # Color: each point's skin color halfway to its mirror point's, at equal luminance,
+        # Color: each point's skin color toward its mirror point's, at equal luminance,
         # smoothed and faded to no change outside the mesh like the ratio.
         cgrid = None
         if config.MIRROR_COLOR > 0 and strength > 0:  # at strength 0 the frame stays untouched
@@ -336,7 +356,7 @@ class Relighter:
             cgrid = 1.0 + fade[..., None] * (cgrid - 1.0)
 
         # Guided upsampling: coefficients on the grid, bilinear to the frame, a * guide + b.
-        a, b = npimg.guided_filter_coeffs(np.sqrt(Yc), grid, config.RATIO_GF_RADIUS, config.RATIO_GF_EPS)
+        a, b = npimg.guided_filter_coeffs(grid_guide, grid, config.RATIO_GF_RADIUS, config.RATIO_GF_EPS)
         fx0, fy0 = max(int(np.floor(box[0])), 0), max(int(np.floor(box[1])), 0)
         fx1, fy1 = min(int(np.ceil(box[2])), w), min(int(np.ceil(box[3])), h)
         ratio_map = np.full((h, w), face_mean, np.float32)
@@ -362,9 +382,10 @@ class Relighter:
             ctx.relit_frame *= color_gain
         np.minimum(ctx.relit_frame, 1.0, out=ctx.relit_frame)
 
-        # Measured on what is shown: with the color gains, the relit luminance is not exactly
-        # Yc * grid (the gains are bounded and smoothed, so they keep luminance only roughly).
-        relit_grid = Yc * grid if cgrid is None else color.luminance(Cc * (grid[..., None] * cgrid))
+        # Measured on what is shown: the guided upsampling of the ratio, and the color gains
+        # (bounded and smoothed, so they keep luminance only roughly).
+        shown = upsampled(grid, 1.0 + strength * (np.array(config.RATIO_CLIP) - 1.0))
+        relit_grid = Yc * shown if cgrid is None else color.luminance(Cc * (shown[..., None] * cgrid))
         fitted_grid = np.zeros((S, S), np.float32)
         target_grid = np.zeros((S, S), np.float32)
         fitted_grid[cov], target_grid[cov] = H @ light, target
